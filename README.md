@@ -1,2 +1,2 @@
-# PD_DFEM_2D
-discrete Galerkin peridynamic
+# Peridynamic
+This is Peridynamic program created by Zheng Guojun from Dlut.

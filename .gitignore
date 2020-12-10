@@ -24,9 +24,14 @@
 *.lai
 *.la
 *.a
-*.lib
 
 # Executables
 *.exe
 *.out
 *.app
+/PD Manager/.vs/PD Manager/v16
+/PD Manager/PD Manager/x64/Debug
+/PD Manager/x64
+/PD Manager/PD Manager/x64/Release
+/.vs
+/include/Eigen/out/build/x64-Debug/CMakeFiles/3.15.19080502-MSVC_2
