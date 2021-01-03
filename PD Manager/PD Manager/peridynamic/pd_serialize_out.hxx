@@ -93,7 +93,7 @@ namespace DLUT
 					/************************************************************************/
 					/* 按照有限元节点输出物理量                                             */
 					/************************************************************************/
-					set<int> femNodeIds = pdModel.PdMeshCore().GetNodeIdsByAll();
+					const set<int>& femNodeIds = pdModel.PdMeshCore().GetNodeIdsByAll();
 
 					for (int nid : femNodeIds)
 					{
@@ -116,17 +116,7 @@ namespace DLUT
 						fprintf(fout, "%20.10E", damageIndex);
 
 						fprintf(fout, "\n");
-					}	
-
-					/*set<int> femEleIds = pdModel.PdMeshCore().GetElementIdsByAll();
-					for (int eleId : femEleIds)
-					{
-						const TPdElement& element = pdModel.PdMeshCore().Element(eleId);
-						fprintf(fout, "%15d", element.Id() + 1);
-						fprintf(fout, "%20.10E", element.DamageIndex());
-
-						fprintf(fout, "\n");
-					}*/
+					}
 				}
 			};
 

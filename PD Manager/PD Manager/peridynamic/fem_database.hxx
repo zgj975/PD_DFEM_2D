@@ -1,19 +1,3 @@
-/*All rights reserved
-
-== == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == ==
---Please append file description informations here --
-FEM database
-TFemNode			:	Node information
-TFemElement			:	Element information 
-TFemMeshCoreData	:	Mesh database contains Node and Element
-== == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == ==
-	Date            Name                    Description of Change
-2018 / 04 / 05		Zheng Guojun			Create
-2019 / 07 / 31		Zheng Guojun			Modified to TEMPLATE type
-$HISTORY$
-== == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == ==
-*/
-
 #ifndef DLUT_SAE_PERIDYNAMIC_FEM_DATABASE_HXX_20181130
 #define DLUT_SAE_PERIDYNAMIC_FEM_DATABASE_HXX_20181130
 
@@ -32,6 +16,11 @@ namespace DLUT
 			typedef Eigen::Matrix<double, 6, 1> TDisplacement;
 			typedef Eigen::Matrix<double, 6, 1> TVelocity;
 			typedef Eigen::Matrix<double, 6, 1> TAcceleration;
+			typedef Eigen::Matrix<double, 6, 1> TStress;
+			typedef Eigen::Matrix<double, 6, 1> TStrain;
+			typedef Eigen::MatrixXd SingleStiffness;
+			const int IP_COUNT = 4;
+			const int DOF = 6;
 
 			enum ANALYSIS_ELEMENT_TYPE {FEM_ELEMENT, PD_ELEMENT};
 			enum MESH_ELEMENT_TYPE {TRIANGLE_ELEMENT, QUADRANGLE_ELEMENT};
@@ -42,12 +31,14 @@ namespace DLUT
 			public:
 				TNodeBase() : m_p_local_id(NULL)
 				{
-					m_coordinate_init.setZero();
-					m_coordinate_current.setZero();
+					m_coordinate_last_step.setZero();
+					m_coordinate_current_step.setZero();
 					m_nid_global = -1;
 					m_set_adj_element_ids.clear();
 
 					m_displacement.setZero();
+					m_iter_displacement.setZero();
+					m_delta_displacement.setZero();
 					m_velocity.setZero();
 					m_acceleration.setZero();
 
@@ -58,34 +49,20 @@ namespace DLUT
 				{
 					m_p_local_id = NULL;	
 					
-					m_coordinate_init = pt;
-					m_coordinate_current = pt;
+					m_coordinate_last_step = pt;
+					m_coordinate_current_step = pt;
 					m_nid_global = golbal_nid;
 					m_set_adj_element_ids.clear();
 
 					m_displacement.setZero();
+					m_iter_displacement.setZero();
+					m_delta_displacement.setZero();
 					m_velocity.setZero();
 					m_acceleration.setZero();
 
 					m_force_of_inner.setZero();
 					m_force_of_outer.setZero();
 				}
-				/*TNodeBase(const TNodeBase& node)
-				{
-					m_p_local_id = node.m_p_local_id;
-
-					m_coordinate_init = node.m_coordinate_init;
-					m_coordinate_current = node.m_coordinate_current;
-					m_nid_global = node.m_nid_global;
-					m_set_adj_element_ids = node.m_set_adj_element_ids;
-
-					m_displacement = node.m_displacement;
-					m_velocity = node.m_velocity;
-					m_acceleration = node.m_acceleration;
-
-					m_force_of_inner = node.m_force_of_inner;
-					m_force_of_outer = node.m_force_of_outer;
-				}*/
 				void				Dispose()
 				{
 					if (m_p_local_id)
@@ -96,10 +73,10 @@ namespace DLUT
 					m_set_adj_element_ids.clear();
 				}
 			public:
-				TCoordinate&		Coordinate() { return m_coordinate_init; }
-				const TCoordinate&	Coordinate() const { return m_coordinate_init; }
-				TCoordinate&		CoordinateCurrent() { return m_coordinate_current; }
-				const TCoordinate&	CoordinateCurrent() const { return m_coordinate_current; }
+				TCoordinate&		Coordinate() { return m_coordinate_last_step; }
+				const TCoordinate&	Coordinate() const { return m_coordinate_last_step; }
+				TCoordinate&		CoordinateCurrent() { return m_coordinate_current_step; }
+				const TCoordinate&	CoordinateCurrent() const { return m_coordinate_current_step; }
 
 				int&				Id() 
 				{
@@ -142,6 +119,11 @@ namespace DLUT
 				TAcceleration&			Acceleration() { return m_acceleration; }
 				const TAcceleration&	Acceleration() const	{ return m_acceleration; }
 		
+				TDisplacement&			IncrementalDisplacement() { return m_delta_displacement; }
+				const TDisplacement&	IncrementalDisplacement() const { return m_delta_displacement; }
+
+				TDisplacement&			IteratorDisplacement() { return m_iter_displacement; }
+				const TDisplacement&	IteratorDisplacement() const { return m_iter_displacement; }
 			public:
 				TForce&					InnerForce() { return m_force_of_inner; }
 				const TForce&			InnerForce() const { return m_force_of_inner; }
@@ -150,8 +132,8 @@ namespace DLUT
 				const TForce&			OuterForce() const { return m_force_of_outer; }
 			
 			private:
-				TCoordinate				m_coordinate_init;					//	Coordinate
-				TCoordinate				m_coordinate_current;				//	Current coordinate
+				TCoordinate				m_coordinate_last_step;				//	Coordinate at Last step 
+				TCoordinate				m_coordinate_current_step;			//	Coordinate at Current step
 				set<int*>				m_set_adj_element_ids;				//	Adjoint element set
 				int						*m_p_local_id;						//	Id of this node
 				int						m_nid_global;						//	Global Id of this node
@@ -159,9 +141,41 @@ namespace DLUT
 				TDisplacement			m_displacement;						//	Displacement
 				TVelocity				m_velocity;							//	Velocity
 				TAcceleration			m_acceleration;						//	Acceleration
+
+				TDisplacement			m_delta_displacement;				//	Incremental Displacement of current incremental step
+				TDisplacement			m_iter_displacement;				//	Iterator Displacement
 			private:
 				TForce					m_force_of_inner;					//	Inner force of this node, such as PD bond force, FEM node force...
 				TForce					m_force_of_outer;					//	Outer force of this node, such as Body force, Interface force...
+			};
+
+			//	Element
+			class TIntegrationPoint
+			{
+			public:
+				TIntegrationPoint()
+				{
+					m_stress.setZero();
+					m_strain.setZero();
+
+					m_strain_current.setZero();
+					m_stress_current.setZero();
+				}
+			public:
+				TStress&			Stress() { return m_stress; }
+				const TStress&		Stress() const { return m_stress; }
+				TStrain&			Strain(){ return m_strain; }
+				const TStrain&		Strain() const{ return m_strain; }
+
+				TStress&			StressCurrent() { return m_stress_current; }
+				const TStress&		StressCurrent() const { return m_stress_current; }
+				TStrain&			StrainCurrent() { return m_strain_current; }
+				const TStrain&		StrainCurrent() const { return m_strain_current; }
+			private:
+				TStress				m_stress;
+				TStrain				m_strain;
+				TStress				m_stress_current;
+				TStrain				m_strain_current;
 			};
 
 			//	Element
@@ -172,6 +186,7 @@ namespace DLUT
 					: m_p_local_id(NULL), ref_nodes(vecNode) 
 				{
 					m_elem_type = FEM_ELEMENT;
+					m_IP.resize(IP_COUNT);
 				}
 				void				Dispose()
 				{
@@ -196,6 +211,8 @@ namespace DLUT
 					m_thickness = right.m_thickness;
 					m_local_coord_system = right.m_local_coord_system;
 
+					m_IP = right.m_IP;
+
 					return *this;
 				}
 			public:
@@ -215,10 +232,10 @@ namespace DLUT
 
 					return *(m_vec_nids[pos]);
 				}
-				int					NodeIdGlobal(int pos) const
+				const TNodeBase&	Node(int pos) const
 				{
 					int nid = NodeId(pos);
-					return ref_nodes[nid].IdGlobal();
+					return ref_nodes[nid];
 				}
 				int					NodeCount() const
 				{
@@ -283,9 +300,7 @@ namespace DLUT
 			public:
 				void				RefreshDatas()
 				{
-					//	获取单元局部坐标系
 					UpdateLocalCoordinateSystem();
-					//	获取顶点在局部坐标系下的坐标值
 					vector<int> nids = NodeIds();
 					if (MeshElementType() == TRIANGLE_ELEMENT)
 					{
@@ -293,17 +308,15 @@ namespace DLUT
 					}
 					const Matrix3d& T = m_local_coord_system;
 
-					//	获取单元体积/边长/半径等
-					const TCoordinate& n0 = ref_nodes[nids[0]].Coordinate();
-					const TCoordinate& n1 = ref_nodes[nids[1]].Coordinate();
-					const TCoordinate& n2 = ref_nodes[nids[2]].Coordinate();
-					const TCoordinate& n3 = ref_nodes[nids[3]].Coordinate();
-					SideLength() = (Distance_2pt(n0, n1) + Distance_2pt(n1, n2) + Distance_2pt(n2, n3) + Distance_2pt(n3, n0)) / 4.0;
+					const TCoordinate& n0 = ref_nodes[nids[0]].CoordinateCurrent();
+					const TCoordinate& n1 = ref_nodes[nids[1]].CoordinateCurrent();
+					const TCoordinate& n2 = ref_nodes[nids[2]].CoordinateCurrent();
+					const TCoordinate& n3 = ref_nodes[nids[3]].CoordinateCurrent();
+					SideLength() = (Distance_2pt(n0, n1) + Distance_2pt(n1, n2)) / 2.0;
 
 					double a = Calculate_Area_Triangle(n0, n1, n2);
 					double b = Calculate_Area_Triangle(n2, n3, n0);
 					Area() = a + b;
-
 					Radius() = sqrt(Area() / PI);
 				}
 				double				Jacobi(double s, double t) const
@@ -420,9 +433,9 @@ namespace DLUT
 				void				UpdateLocalCoordinateSystem()
 				{
 					vector<int> nids = NodeIds();
-					const TCoordinate& n1 = ref_nodes[nids[0]].Coordinate();
-					const TCoordinate& n2 = ref_nodes[nids[1]].Coordinate();
-					const TCoordinate& n3 = ref_nodes[nids[2]].Coordinate();
+					const TCoordinate& n1 = ref_nodes[nids[0]].CoordinateCurrent();
+					const TCoordinate& n2 = ref_nodes[nids[1]].CoordinateCurrent();
+					const TCoordinate& n3 = ref_nodes[nids[2]].CoordinateCurrent();
 
 					Vector3d lx = n2 - n1;
 					Vector3d ly = n3 - n2;
@@ -437,11 +450,14 @@ namespace DLUT
 					m_local_coord_system.block(1, 0, 1, 3) = ly.transpose();
 					m_local_coord_system.block(2, 0, 1, 3) = lz.transpose();
 				}
-				const				Matrix3d& LocalCoorSystem() const
-				{
-					return m_local_coord_system;
-				}
+				Matrix3d&			LocalCoorSystem() { return m_local_coord_system; }
+				const Matrix3d&		LocalCoorSystem() const { return m_local_coord_system; }
 
+				SingleStiffness&			SK() { return m_single_stiffness; }
+				const SingleStiffness&		SK() const { return m_single_stiffness; }
+
+				TIntegrationPoint&			IP(int index) { return m_IP[index]; }
+				const TIntegrationPoint&	IP(int index) const { return m_IP[index]; }
 			private:
 				vector<int*>		m_vec_nids;						//	Node Ids of this element
 				int					m_part_id;						//	Part Id of this element
@@ -455,6 +471,9 @@ namespace DLUT
 				double				m_thickness;					//	Thickness of this element
 			private:
 				Matrix3d			m_local_coord_system;			//	Local coordinate system of the element
+			private:
+				SingleStiffness		m_single_stiffness;				//	Single Stiffness Matrix of this element
+				vector<TIntegrationPoint>	m_IP;					//	Integration Points of this element
 			private:
 				vector<TNodeBase>&	ref_nodes;						//	Node Data
 			};
@@ -498,6 +517,7 @@ namespace DLUT
 					TNode node(pt, global_nid);
 					m_nodes.push_back(node);
 					m_nodes.back().Id() = (int)(m_nodes.size() - 1);
+					m_set_nids.insert(m_nodes.back().Id());
 				}
 				void				DeleteNode(int nid)
 				{
@@ -519,20 +539,9 @@ namespace DLUT
 				{
 					return m_nodes[nid_local];
 				}
-				set<int>			GetNodeIdsByAll() const
+				const set<int>&		GetNodeIdsByAll() const
 				{
-					set<int> nids;
-
-					for (const TElement& element : m_elements)
-					{
-						const vector<int>& ele_nids = element.NodeIds();
-						for (int nid : ele_nids)
-						{
-							nids.insert(nid);
-						}
-					}
-
-					return nids;
+					return m_set_nids;
 				}
 		
 				void				InsertElement(const vector<int>& nids, int id_global, int part_id)
@@ -550,6 +559,7 @@ namespace DLUT
 						node.InsertAdjElement(&(element.Id()));
 					}
 					element.RefreshDatas();
+					m_set_eids.insert(element.Id());
 				}
 				void				DeleteElement(int eid)
 				{
@@ -587,11 +597,10 @@ namespace DLUT
 						for (int nid : nids_old)
 						{
 							if (m_nodes[nid].AdjElementCount() > 1)
-							{
-								//	原节点删掉相应相邻单元信息
+							{							
 								m_nodes[nid].DeleteAdjElement(&element.Id());
 								InsertNode(m_nodes[nid].Coordinate(), element.IdGlobal() * 100 + m_nodes[nid].IdGlobal());
-								//	新节点添加相应相邻单元信息
+							
 								m_nodes.back().InsertAdjElement(&element.Id());
 								nids_new.push_back(&(m_nodes.back().Id()));
 							}
@@ -605,14 +614,9 @@ namespace DLUT
 					}
 				}
 
-				set<int>			GetElementIdsByAll() const
+				const set<int>&		GetElementIdsByAll() const
 				{
-					set<int> eids;
-					for (const TElement& element : m_elements)
-					{
-						eids.insert(element.Id());
-					}
-					return eids;
+					return m_set_eids;
 				}
 				set<int>			GetElementIdsByPart(int pid)
 				{
@@ -647,6 +651,9 @@ namespace DLUT
 			private:
 				vector<TNode>		m_nodes;
 				vector<TElement>	m_elements;
+			private:
+				set<int>			m_set_nids;
+				set<int>			m_set_eids;
 			private:
 				set<int>			m_set_output_element_ids;
 				set<int>			m_set_output_node_ids;

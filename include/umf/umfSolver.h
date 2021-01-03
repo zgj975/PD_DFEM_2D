@@ -12,8 +12,6 @@ using namespace std;
 
 void umf_solver(const SparseMatrix<double>& A, vector<double>& x, const vector<double>& b)
 {
-	double start = clock();
-
 	vector<int> Ap;
 	vector<int> Ai;
 	vector<double> Ax;
@@ -43,16 +41,11 @@ void umf_solver(const SparseMatrix<double>& A, vector<double>& x, const vector<d
 	double *null = (double *)NULL;
 	void *Symbolic, *Numeric;
 
-	cout << "SolverInit:\t\t\t\t\t" << (clock() - start) / 1000. << endl;
-	start = clock();
-
 	umfpack_di_symbolic(n, n, &Ap[0], &Ai[0], &Ax[0], &Symbolic, null, null);
 	umfpack_di_numeric(&Ap[0], &Ai[0], &Ax[0], Symbolic, &Numeric, null, null);
 	umfpack_di_free_symbolic(&Symbolic);
 	umfpack_di_solve(UMFPACK_A, &Ap[0], &Ai[0], &Ax[0], &x[0], &b[0], Numeric, null, null);
 	umfpack_di_free_numeric(&Numeric);
-
-	cout << "Solver:\t\t\t\t\t\t" << (clock() - start) / 1000. << endl;
 }
 
 #endif

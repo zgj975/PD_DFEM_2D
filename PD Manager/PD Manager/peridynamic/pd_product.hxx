@@ -22,6 +22,7 @@ $HISTORY$
 
 #include "pd_serialize.hxx"
 #include "pd_solver_bbpd.hxx"
+#include "pd_solver_beampd.hxx"
 
 #include <time.h>
 

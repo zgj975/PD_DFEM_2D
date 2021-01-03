@@ -272,7 +272,8 @@ void CPDManagerDlg::OnBnClickedOk()
 
 	string fp_lsdyna = CW2A(m_fp_information.GetString());
 
-	PdProduct<TSolverBBPD> product;
+//	PdProduct<TSolverBBPD> product;
+	PdProduct<TSolverBeamPD> product;
 
 	product.SetFilePath(fp_lsdyna);
 	product.SetCalculateParas(m_load_step, m_time_step, m_iterator_nums, m_plot_frames);

@@ -43,7 +43,7 @@ namespace DLUT
 			static bool USE_CONSTANT_HORIZON = TRUE;
 						
 			/************************************************************************/
-			/* ²ÉÓÃBeam PDÊ±£¬½Úµã²ÉÓÃ6¸ö×ÔÓÉ¶È,²ÉÓÃBBPDÊ±£¬½Úµã²ÉÓÃ3¸ö×ÔÓÉ¶È       */
+			/* ï¿½ï¿½ï¿½ï¿½Beam PDÊ±ï¿½ï¿½ï¿½Úµï¿½ï¿½ï¿½ï¿½6ï¿½ï¿½ï¿½ï¿½ï¿½É¶ï¿½,ï¿½ï¿½ï¿½ï¿½BBPDÊ±ï¿½ï¿½ï¿½Úµï¿½ï¿½ï¿½ï¿½3ï¿½ï¿½ï¿½ï¿½ï¿½É¶ï¿½       */
 			/************************************************************************/
 			typedef Eigen::MatrixXd SingleStiffness;
 
@@ -106,7 +106,7 @@ namespace DLUT
 				const SingleStiffness&		SK() const { return m_single_stiffness; }
 			private:
 				/************************************************************************/
-				/* µ¥¸ÕF=Kd²ÉÓÃÁËÁºµ¥Ôª½á¹¹£¬»ùÊýÎª12                                   */
+				/* F=K*d                                   */
 				/************************************************************************/
 				double						m_volume;				//	Modified volume of NODE_j
 				TCoordinate					m_center;				//	Shape center of NODE_j
@@ -238,7 +238,7 @@ namespace DLUT
 					for (int loop = 0; loop < (int)(m_vec_parts.size()); ++loop)
 					{
 						TPart& cur_part = m_vec_parts[loop];
-						//	Èç¹ûÓÐÍ¬ÑùIDºÅµÄPART£¬Ôò¸üÐÂÐÅÏ¢¼´¿É
+						//	ï¿½ï¿½ï¿½ï¿½ï¿½Í¬ï¿½ï¿½IDï¿½Åµï¿½PARTï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¢ï¿½ï¿½ï¿½ï¿½
 						if (cur_part.Id() == part.Id())
 						{
 							m_vec_parts[loop] = part;
@@ -246,7 +246,7 @@ namespace DLUT
 							break;
 						}
 					}
-					//	Èç¹û²»´æÔÚÍ¬ÑùIDµÄPART£¬ÔòÐÂ²åÈëÒ»¸ö
+					//	ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¬ï¿½ï¿½IDï¿½ï¿½PARTï¿½ï¿½ï¿½ï¿½ï¿½Â²ï¿½ï¿½ï¿½Ò»ï¿½ï¿½
 					if (!b_exist)
 					{
 						m_vec_parts.push_back(part);
@@ -457,18 +457,18 @@ namespace DLUT
 				//	Update the *PART informations into PD MODEL
 				void				UpdatePartInfo()
 				{	
+					double start = clock();
 					if (PartCounts() == 0)
 					{
 						cout << "ERROR: Have no any part information in this LSDYNA file!" << endl;
 						return;
 					}
-
-					//	½«¿É¶ÏÁÑÇøÓòµÄµ¥ÔªÉèÖÃ³ÉÀëÉ¢µ¥Ôª
-					set<int> eids = m_pd_meshcore.GetElementIdsByAll();
-					for (int eid : eids)
-					{
-						m_pd_meshcore.AddSeparateElement(eid);						
-					}
+										
+					//set<int> eids = m_pd_meshcore.GetElementIdsByAll();
+					//for (int eid : eids)
+					//{
+					//	m_pd_meshcore.AddSeparateElement(eid);						
+					//}
 				
 					for (int pid = 0; pid < PartCounts(); ++pid)
 					{
@@ -476,7 +476,7 @@ namespace DLUT
 						
 						set<int> eids = m_pd_meshcore.GetElementIdsByPart(part.Id());
 						part.AddElementId(eids);
-						//	ÉèÖÃµ¥ÔªµÄTHICKNESS
+						//	ï¿½ï¿½ï¿½Ãµï¿½Ôªï¿½ï¿½THICKNESS
 						const TSection& section = Section(part.SectionId());
 						string stype = section.Type();
 						if (stype == "PLANE_STRESS" ||
@@ -491,7 +491,7 @@ namespace DLUT
 						}
 					}
 					
-					//	¸üÐÂ²ÄÁÏÐÅÏ¢
+					//	ï¿½ï¿½ï¿½Â²ï¿½ï¿½ï¿½ï¿½ï¿½Ï¢
 					for (const TPart& part : Parts())
 					{
 						if (!MaterialExist(part.MaterialId()))
@@ -545,9 +545,13 @@ namespace DLUT
 							}
 						}
 					}
+
+					double total_time = (clock() - start) / 1000;
+					cout << "UpdatePartInfo():\t\t" << total_time << endl;
 				}
 				void				UpdateFamilyInParts()
 				{
+					double start = clock();
 					//	First, delete all exist family information
 					for (int loop = 0; loop < m_pd_meshcore.ElementCount(); ++loop)
 					{
@@ -562,9 +566,9 @@ namespace DLUT
 						string stype = section.Type();
 
 						const set<int> eleIds = part.GetElementIds();
-						for (int ni : eleIds)
-						{			
-							TPdElement& element_i = m_pd_meshcore.Element(ni);
+						parallel_for_each(eleIds.begin(), eleIds.end(), [&](int ei)
+						{
+							TPdElement& element_i = m_pd_meshcore.Element(ei);
 							TCoordinate coor_i = element_i.CoordinateInElement(0, 0);
 
 							double dx = element_i.SideLength();
@@ -581,12 +585,12 @@ namespace DLUT
 								dis_for_juge = m * dx + ERR_VALUE;
 							}
 
-							for (int nj : eleIds)
+							for (int ej : eleIds)
 							{
-								if (ni == nj)
+								if (ei == ej)
 									continue;
 								
-								TPdElement& element_j = m_pd_meshcore.Element(nj);
+								TPdElement& element_j = m_pd_meshcore.Element(ej);
 								TCoordinate coor_j = element_j.CoordinateInElement(0, 0);
 
 								if ((abs(coor_i.x() - coor_j.x()) < dis_for_juge) &&
@@ -598,12 +602,14 @@ namespace DLUT
 									{
 										Vector3d cij;
 										double intersect_volume = CalModifiedVolume(element_i, element_j, stype, cij);
-										element_i.InsertFamilyElement(nj, intersect_volume, cij);
+										element_i.InsertFamilyElement(ej, intersect_volume, cij);
 									}
 								}
 							}
-						}
+						});
 					}
+					double total_time = (clock() - start) / 1000;
+					cout << "UpdateFamilyInParts():\t\t" << total_time  << endl;
 				}
 			public:
 				//	Refresh the *BOUNDARY_SPC_NODE informations into PD MODEL
@@ -641,7 +647,7 @@ namespace DLUT
 						}
 						else
 						{
-							//	Ã»ÓÐÇúÏß£¬Ôò±íÃ÷¼ÓÔØÁ¦Îª³£Öµ
+							//	Ã»ï¿½ï¿½ï¿½ï¿½ï¿½ß£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Îªï¿½ï¿½Öµ
 							value_force = tlnp.Sf();
 						}
 						
@@ -783,6 +789,8 @@ namespace DLUT
 				//	Generate initial crevice for PD model
 				void				GenerateInitCrevice()
 				{
+					double start = clock();
+				
 					for (const TCrevice& crevice : m_vec_crevice)
 					{
 						for (const TPart& part : Parts())
@@ -814,10 +822,14 @@ namespace DLUT
 							});
 						}
 					}
+					
+					double total_time = (clock() - start) / 1000;
+					cout << "GenerateInitCrevice():\t\t" << total_time << endl;
 				}
 				//	Generate initial Damage Value for all PD nodes
 				void				GenerateInitDamage()
 				{
+					double start = clock();
 					//	Set FamilyNodeCount for Initial Damage Value
 					set<int> eleIds = m_pd_meshcore.GetElementIdsByAll();
 					for (int i : eleIds)
@@ -825,6 +837,9 @@ namespace DLUT
 						TPdElement& element = m_pd_meshcore.Element(i);
 						element.InitDamageIndex();
 					}
+
+					double total_time = (clock() - start) / 1000;
+					cout << "GenerateInitDamage():\t\t" << total_time << endl;
 				}
 			public:
 				//	Influence index
@@ -880,7 +895,7 @@ namespace DLUT
 			};
 
 			/************************************************************************/
-			/* ´Ó vector< map<int, double> > ×ª»»µ½ Ï¡Êè¾ØÕó                        */
+			/* ï¿½ï¿½ vector< map<int, double> > ×ªï¿½ï¿½ï¿½ï¿½ Ï¡ï¿½ï¿½ï¿½ï¿½ï¿½                        */
 			/************************************************************************/
 			void TransVecMap2SparseMatrix(const vector< map<int, double> >& vec_map_matrix, SparseMatrix<double>& sparse_matrix)
 			{
@@ -903,7 +918,7 @@ namespace DLUT
 				sparse_matrix.setFromTriplets(tri.begin(), tri.end());
 			}
 			/************************************************************************/
-			/* ´Ó vector< map<int, double> > ×ª»»µ½ Matrix¾ØÕó                      */
+			/* ï¿½ï¿½ vector< map<int, double> > ×ªï¿½ï¿½ï¿½ï¿½ Matrixï¿½ï¿½ï¿½ï¿½                      */
 			/************************************************************************/
 			void TransVecMap2Matrix(const vector< map<int, double> >& vec_map_matrix, MatrixXd& matrix)
 			{
