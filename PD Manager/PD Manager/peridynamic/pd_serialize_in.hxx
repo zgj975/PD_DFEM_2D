@@ -502,9 +502,12 @@ namespace DLUT
 
 							continue;
 						}										
-						else if (string("*SET_SHELL_LIST") == line)
+						else if (string("*SET_SHELL_LIST_TITLE") == line)
 						{
 							getline(fin, line);
+							string setName = line;
+							getline(fin, line);
+							int setId = ParseString<int>(line.substr(0, line.length()-1));
 
 							streampos pos = fin.tellg();
 							while (getline(fin, line))
@@ -523,8 +526,15 @@ namespace DLUT
 									if (eid != 0)
 									{
 										int eid_local = map_fem_eid_global_to_fem_eid_local[eid];
-										//	选择的单元为固定的FEM网格，并且不能发生断裂
-										pdModel.PdMeshCore().Element(eid_local).CalParas().b_facture = false;
+
+										if (setName == "PD")
+										{
+											pdModel.PdMeshCore().Element(eid_local).AnalysisElementType() = PD_ELEMENT;
+										}
+										else if (setName == "NON-FRACTURE")
+										{
+											pdModel.PdMeshCore().Element(eid_local).CalParas().b_facture = false;
+										}
 									}
 								}
 

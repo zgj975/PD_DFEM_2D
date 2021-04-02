@@ -1,4 +1,4 @@
-/*All rights reserved
+﻿/*All rights reserved
 
 == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == == ==
 --Please append file description informations here --
@@ -41,6 +41,7 @@ namespace DLUT
 			static double RATIO_OF_HORIZON_MESHSIZE = 3.0;
 			static double HORIZON = 3.0;
 			static bool USE_CONSTANT_HORIZON = TRUE;
+			static int INFLUENCE_FUNC = 1;
 						
 			/************************************************************************/
 			/* ����Beam PDʱ���ڵ����6�����ɶ�,����BBPDʱ���ڵ����3�����ɶ�       */
@@ -133,6 +134,7 @@ namespace DLUT
 					m_map_family_bonds = right.m_map_family_bonds;
 					m_pd_paras = right.m_pd_paras;
 					m_d_init_volumes = right.m_d_init_volumes;
+					m_horizon = right.m_horizon;
 
 					return *this;
 				}
@@ -158,7 +160,6 @@ namespace DLUT
 						m_d_init_volumes += mnt.second.Volume();
 					}
 				}
-			public:
 				double					DamageIndex() const
 				{
 					double current_volumes = 0;
@@ -169,11 +170,14 @@ namespace DLUT
 					}
 					return (1.0 - (current_volumes / m_d_init_volumes));
 				}
-			
+			public:
+				double&					Horizon() { return m_horizon; }
+				double					Horizon() const { return m_horizon; }
 			private:
 				MAP_NJ_TPDBOND			m_map_family_bonds;					//	Bond informations
 				TPdCalculateParas		m_pd_paras;							//	Calculate parameters of PD Element
 				double					m_d_init_volumes;					//	Initial volumes for damage calculation
+				double					m_horizon;							//	Horizon of this element
 			};
 			
 			typedef TMeshCoreTemplate<TPdNode, TPdElement> TPdMeshCore;
@@ -463,12 +467,16 @@ namespace DLUT
 						cout << "ERROR: Have no any part information in this LSDYNA file!" << endl;
 						return;
 					}
-										
-					//set<int> eids = m_pd_meshcore.GetElementIdsByAll();
-					//for (int eid : eids)
-					//{
-					//	m_pd_meshcore.AddSeparateElement(eid);						
-					//}
+					
+					//	在PD区域创建非连续伽辽金单元
+					set<int> eids = m_pd_meshcore.GetElementIdsByAll();
+					for (int eid : eids)
+					{
+						if (m_pd_meshcore.Element(eid).AnalysisElementType() == PD_ELEMENT)
+						{
+							m_pd_meshcore.AddSeparateElement(eid);
+						}
+					}
 				
 					for (int pid = 0; pid < PartCounts(); ++pid)
 					{
@@ -487,6 +495,15 @@ namespace DLUT
 							{
 								TPdElement& pd_element = m_pd_meshcore.Element(eid);
 								pd_element.Thickness() = thickness;
+
+								if (DLUT::SAE::PERIDYNAMIC::USE_CONSTANT_HORIZON)
+								{
+									pd_element.Horizon() = DLUT::SAE::PERIDYNAMIC::HORIZON;
+								}
+								else
+								{
+									pd_element.Horizon() = pd_element.SideLength() * DLUT::SAE::PERIDYNAMIC::RATIO_OF_HORIZON_MESHSIZE;
+								}
 							}
 						}
 					}

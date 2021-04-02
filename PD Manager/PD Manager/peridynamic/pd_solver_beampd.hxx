@@ -360,17 +360,8 @@ namespace DLUT
 						parallel_for_each(eids.begin(), eids.end(), [&](int ei) {
 							TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
 
-							const double dx = element_i.SideLength();
-							double horizon = 0.0;
-							if (DLUT::SAE::PERIDYNAMIC::USE_CONSTANT_HORIZON)
-							{
-								horizon = DLUT::SAE::PERIDYNAMIC::HORIZON;
-							}
-							else
-							{
-								horizon = element_i.SideLength() * DLUT::SAE::PERIDYNAMIC::RATIO_OF_HORIZON_MESHSIZE;
-							}
-
+							double horizon = element_i.Horizon();
+						
 							double& cax = element_i.CalParas().cax;
 							double& cby = element_i.CalParas().cby;
 							double& cbz = element_i.CalParas().cbz;
@@ -379,24 +370,36 @@ namespace DLUT
 
 							double ri = element_i.Radius();
 							double D0 = E * pow(t, 3) / (12.0 * (1 - pow(PR, 2)));
-							cax = 6 * E / (PI * (pow(horizon, 3) - pow(ri, 3)) * (1 - PR) * t);
-							//	考虑剪切影响
-							double phi = 5 * (horizon - ri) / (2 * dx * sqrt(15 * (1 + PR)));
-							double lamda = phi / (phi - atan(phi));
-							cbz = lamda * E * (1 - 3 * PR) / (6 * PI * (horizon - ri) * (1 - pow(PR, 2)) * t);
-												
-							cby = 6 * D0 * (1 + PR) / (PI * (pow(horizon, 3) - pow(ri, 3)) * pow(t, 2));
-							ctor = 6 * D0 * (1 - 3 * PR) / (PI * (pow(horizon, 3) - pow(ri, 3)) * pow(t, 2));
-
-							double G = E / (2 * (1 + PR));
-							double k = 6.0 / 5.0;
-							csy = 6 * G / (k * PI * t * (pow(horizon, 3) - pow(ri, 3)));
+							switch (DLUT::SAE::PERIDYNAMIC::INFLUENCE_FUNC)
+							{
+								// g(xi, delta) = 1;
+							case 1:
+							{
+								cax = 6 * E / (PI * (pow(horizon, 3) - pow(ri, 3)) * (1 - PR) * t);
+								cbz = E * (1 - 3 * PR) / (6 * PI * (horizon - ri) * (1 - pow(PR, 2)) * t);
+								cby = 6 * D0 * (1 + PR) / (PI * (pow(horizon, 3) - pow(ri, 3)) * pow(t, 2));
+								ctor = 6 * D0 * (1 - 3 * PR) / (PI * (pow(horizon, 3) - pow(ri, 3)) * pow(t, 2));
+							}
+								break;
+								// g(xi, delta) = 1 - xi/delta;
+							case 2:
+							{
+								cax = 6 * E / (PI * (pow(horizon, 3) - pow(ri, 3)) * (1 - PR) * t);
+								cbz = E * (1 - 3 * PR) / (6 * PI * (horizon - ri) * (1 - pow(PR, 2)) * t);
+								cby = 6 * D0 * (1 + PR) / (PI * (pow(horizon, 3) - pow(ri, 3)) * pow(t, 2));
+								ctor = 6 * D0 * (1 - 3 * PR) / (PI * (pow(horizon, 3) - pow(ri, 3)) * pow(t, 2));
+							}
+								break;
+							
+							default:
+								break;
+							}
 						});
 						/************************************************************************/
 						/* 计算所有Bond的单刚矩阵                                               */
 						/************************************************************************/
 						double start = clock();
-						/*parallel_*/for_each(eids.begin(), eids.end(), [&](int ei)
+						parallel_for_each(eids.begin(), eids.end(), [&](int ei)
 							{
 								TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
 								genSingleStiffnessPD(element_i);
@@ -475,7 +478,6 @@ namespace DLUT
 					const double cby = element_i.CalParas().cby;
 					const double cbz = element_i.CalParas().cbz;
 					const double ctor = element_i.CalParas().ctor;
-					const double csy = element_i.CalParas().csy;
 
 					map<int, TPdBond>& familyBonds = element_i.FamilyElementBonds();
 					for (map<int, TPdBond>::iterator iter = familyBonds.begin();
@@ -520,7 +522,7 @@ namespace DLUT
 										double jb = 0.5 * Distance_2pt<Vector3d>(element_j.Node(1).CoordinateCurrent(), element_j.Node(2).CoordinateCurrent());;
 
 										double L = Module<TCoordinate>(Xj - Xi);
-										MatrixXd k = SK_LOCAL(cax, cby, cbz, ctor, csy, L, element_i.SideLength(), PR);
+										MatrixXd k = SK_LOCAL(cax, cby, cbz, ctor, L);
 										Eigen::MatrixXd Nij = N_IJ(s[is], t[it],ia, ib, s[js], t[jt], ja, jb);
 
 										//	方向要进行归一化处理
@@ -528,7 +530,7 @@ namespace DLUT
 										Eigen::MatrixXd Tb = T_b(vec_ij);
 
 										// 0.5表示bond正反都会计算一次
-										SK += 0.5 * volume_scale * Ji * Jj * TE * Nij.transpose() * Te.transpose() * Tb.transpose() * k * Tb * Te * Nij * TE.transpose() * thickness_i * thickness_j;
+										SK += 0.5 * volume_scale * g(L,element_i.Horizon()) * Ji * Jj * TE.transpose() * Nij.transpose() * Te * Tb.transpose() * k * Tb * Te.transpose() * Nij * TE * thickness_i * thickness_j;
 									}
 								}
 							}
@@ -763,11 +765,8 @@ namespace DLUT
 
 					return Res;
 				}
-				Eigen::MatrixXd SK_LOCAL(double cax, double cby, double cbz, double ctor, double csy, double L, double dx, double PR)
-				{
-					double By = 12 * cby / (pow(L, 2) * csy);
-					double Bz = 12 * (1 + PR) * pow(dx, 2) / (5 * pow(L, 2));
-
+				Eigen::MatrixXd SK_LOCAL(double cax, double cby, double cbz, double ctor, double L)
+				{		
 					MatrixXd k;
 					k.resize(12, 12);
 					k.setZero();
@@ -775,13 +774,13 @@ namespace DLUT
 					k(0, 0) = cax / L;
 					k(0, 6) = -k(0, 0);
 
-					k(1, 1) = 12.0 * cbz / pow(L, 3) / (1 + Bz);
-					k(1, 5) = 6.0 * cbz / pow(L, 2) / (1 + Bz);
+					k(1, 1) = 12.0 * cbz / pow(L, 3);
+					k(1, 5) = 6.0 * cbz / pow(L, 2);
 					k(1, 7) = -k(1, 1);
 					k(1, 11) = k(1, 5);
 
-					k(2, 2) = 12.0 * cby / pow(L, 3) / (1 + By);
-					k(2, 4) = -6.0 * cby / pow(L, 2) / (1 + By);
+					k(2, 2) = 12.0 * cby / pow(L, 3);
+					k(2, 4) = -6.0 * cby / pow(L, 2);
 					k(2, 8) = -k(2, 2);
 					k(2, 10) = k(2, 4);
 
@@ -789,14 +788,14 @@ namespace DLUT
 					k(3, 9) = -k(3, 3);
 
 					k(4, 2) = k(2, 4);
-					k(4, 4) = (4.0 + By) * cby / L / (1 + By);
+					k(4, 4) = 4.0 * cby / L;
 					k(4, 8) = -k(4, 2);
-					k(4, 10) = (2.0 - By) * cby / L / (1 + By);
+					k(4, 10) = 2.0 * cby / L;
 
 					k(5, 1) = k(1, 5);
-					k(5, 5) = (4.0 + Bz) * cbz / L / (1 + Bz);
+					k(5, 5) = 4.0 * cbz / L;
 					k(5, 7) = -k(5, 1);
-					k(5, 11) = (2.0 - Bz) * cbz / L / (1 + Bz);
+					k(5, 11) = 2.0 * cbz / L;
 
 					k(6, 0) = k(0, 6);
 					k(6, 6) = -k(6, 0);
@@ -817,14 +816,30 @@ namespace DLUT
 					k(10, 2) = k(2, 10);
 					k(10, 4) = k(4, 10);
 					k(10, 8) = k(8, 10);
-					k(10, 10) = (4.0 + By) * cby / L / (1 + By);
+					k(10, 10) = 4.0 * cby / L;
 
 					k(11, 1) = k(1, 11);
 					k(11, 5) = k(5, 11);
 					k(11, 7) = k(7, 11);
-					k(11, 11) = (4.0 + Bz) * cbz / L / (1 + Bz);
+					k(11, 11) = 4.0 * cbz / L;
 
 					return k;
+				}
+				double			g(double xi, double delta)
+				{
+					double res = 0;
+					switch (DLUT::SAE::PERIDYNAMIC::INFLUENCE_FUNC)
+					{
+					case 1:
+						res = 1.0;
+						break;
+					case 2:
+						res = 1.0 - xi / delta;
+						break;
+					default:
+						break;
+					}
+					return res;
 				}
 			private:
 				// F=K*D

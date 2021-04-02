@@ -18,6 +18,7 @@ namespace DLUT
 			typedef Eigen::Matrix<double, 6, 1> TAcceleration;
 			typedef Eigen::Matrix<double, 6, 1> TStress;
 			typedef Eigen::Matrix<double, 6, 1> TStrain;
+			typedef Eigen::Matrix<double, 6, 1> TMass;
 			typedef Eigen::MatrixXd SingleStiffness;
 			const int IP_COUNT = 4;
 			const int DOF = 6;
@@ -42,6 +43,8 @@ namespace DLUT
 					m_velocity.setZero();
 					m_acceleration.setZero();
 
+					m_mass.setZero();
+
 					m_force_of_inner.setZero();
 					m_force_of_outer.setZero();
 				}
@@ -59,6 +62,8 @@ namespace DLUT
 					m_delta_displacement.setZero();
 					m_velocity.setZero();
 					m_acceleration.setZero();
+
+					m_mass.setZero();
 
 					m_force_of_inner.setZero();
 					m_force_of_outer.setZero();
@@ -124,6 +129,9 @@ namespace DLUT
 
 				TDisplacement&			IteratorDisplacement() { return m_iter_displacement; }
 				const TDisplacement&	IteratorDisplacement() const { return m_iter_displacement; }
+
+				TMass&					Mass() { return m_mass; }
+				const TMass&			Mass() const  { return m_mass; }
 			public:
 				TForce&					InnerForce() { return m_force_of_inner; }
 				const TForce&			InnerForce() const { return m_force_of_inner; }
@@ -144,6 +152,8 @@ namespace DLUT
 
 				TDisplacement			m_delta_displacement;				//	Incremental Displacement of current incremental step
 				TDisplacement			m_iter_displacement;				//	Iterator Displacement
+
+				TMass					m_mass;								//	Mass of this node
 			private:
 				TForce					m_force_of_inner;					//	Inner force of this node, such as PD bond force, FEM node force...
 				TForce					m_force_of_outer;					//	Outer force of this node, such as Body force, Interface force...
@@ -392,7 +402,7 @@ namespace DLUT
 					TCoordinate res_global = T.transpose() * res_local;
 
 					return res_global;
-				}				
+				}
 				TDisplacement		DisplaceInElement(double s, double t) const 
 				{
 					const Matrix3d& T = m_local_coord_system;
@@ -602,9 +612,13 @@ namespace DLUT
 								InsertNode(m_nodes[nid].Coordinate(), element.IdGlobal() * 100 + m_nodes[nid].IdGlobal());
 							
 								m_nodes.back().InsertAdjElement(&element.Id());
+								//	老节点与单元解除拓扑关系
+								m_nodes[nid].DeleteAdjElement(&element.Id());
+
 								nids_new.push_back(&(m_nodes.back().Id()));
 							}
 							else
+
 							{
 								nids_new.push_back(&(m_nodes[nid].Id()));
 							}							

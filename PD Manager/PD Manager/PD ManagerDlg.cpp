@@ -60,6 +60,7 @@ CPDManagerDlg::CPDManagerDlg(CWnd* pParent /*=NULL*/)
 	, m_load_step(1)
 	, m_radio_horizon_type(0)
 	, m_d_const_horizon(3.0)
+	, m_infuence_func(1)
 {
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 }
@@ -76,6 +77,7 @@ void CPDManagerDlg::DoDataExchange(CDataExchange* pDX)
 	DDX_Text(pDX, IDC_EDIT_LOAD_STEP, m_load_step);
 	DDX_Radio(pDX, IDC_RADIO_CONSTANT_HORIZON, m_radio_horizon_type);
 	DDX_Text(pDX, IDC_EDIT_CONSTANT_HORIZON, m_d_const_horizon);
+	DDX_Text(pDX, IDC_EDIT_INFLUENCE_FUNC, m_infuence_func);
 }
 
 BEGIN_MESSAGE_MAP(CPDManagerDlg, CDialogEx)
@@ -278,6 +280,7 @@ void CPDManagerDlg::OnBnClickedOk()
 	product.SetFilePath(fp_lsdyna);
 	product.SetCalculateParas(m_load_step, m_time_step, m_iterator_nums, m_plot_frames);
 
+	product.SetInfluenceFunc(m_infuence_func);
 
 	if (m_radio_horizon_type == 0)
 	{

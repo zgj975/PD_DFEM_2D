@@ -64,6 +64,10 @@ namespace DLUT
 				{
 					DLUT::SAE::PERIDYNAMIC::USE_CONSTANT_HORIZON = used;
 				}
+				void		SetInfluenceFunc(int funcId)
+				{
+					DLUT::SAE::PERIDYNAMIC::INFLUENCE_FUNC = funcId;
+				}
 				void		SetCalculateParas(int load_step = 10, double time_interval = 10E-7, int iterator_nums = 1000, int plot_frames = 10)
 				{
 					m_load_step = load_step;

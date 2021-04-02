@@ -48,4 +48,5 @@ public:
 	int 	m_load_step;
 	int		m_radio_horizon_type;
 	double	m_d_const_horizon;
+	int		m_infuence_func;
 };

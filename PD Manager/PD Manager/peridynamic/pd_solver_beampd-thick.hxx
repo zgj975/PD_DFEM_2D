@@ -1,21 +1,5 @@
-/*==============================================================================
-
-Copyright 2017 Dalian University of Technology .
-All rights reserved
-
-================================================================================
--- Please append file description informations here --
-The Solver for 2D blank / shell
-================================================================================
-Date            Name                    Description of Change
-2020 / 04 / 21		Zheng Guojun			Create
-2020 / 04 / 21		Zheng Guojun			Update RefreshFracture
-$HISTORY$
-================================================================================
-*/
-
-#ifndef DLUT_SAE_PERIDYNAMIC_PD_SOLVERS_BBPD_HXX_20200421
-#define DLUT_SAE_PERIDYNAMIC_PD_SOLVERS_BBPD_HXX_20200421
+#ifndef DLUT_SAE_PERIDYNAMIC_PD_SOLVERS_BEAM_PD_HXX_20201225
+#define DLUT_SAE_PERIDYNAMIC_PD_SOLVERS_BEAM_PD_HXX_20201225
 
 #include "pd_database.hxx"
 
@@ -26,11 +10,11 @@ namespace DLUT
 		namespace PERIDYNAMIC
 		{
 			//	PD Implicit analysis 
-			class TSolverBBPD
+			class TSolverBeamPD
 			{
 			public:
-				TSolverBBPD() {}
-				~TSolverBBPD() {}
+				TSolverBeamPD() {}
+				~TSolverBeamPD() {}
 			public:
 				void				Attach(TPdModel& model)
 				{
@@ -48,11 +32,9 @@ namespace DLUT
 					/************************************************************************/
 					/* 生成总刚矩阵                                                         */
 					/************************************************************************/
-					double start = clock();
-					cout << "Begin to Initialize Material Parameters of Peridynamic model..." << endl;
-					
-					genGlobalStiffness();
-					cout << "Stiffness Matrix:\t\t\t\t" << (clock() - start) / 1000. << endl;
+					double start = clock();					
+					genGlobalStiffnessPD();
+					cout << "genGlobalStiffnessPD():\t\t" << (clock() - start) / 1000. << endl;
 
 					/************************************************************************/
 					/* 生成力向量                                                           */
@@ -60,7 +42,7 @@ namespace DLUT
 					start = clock();
 					int nCount = pdModel.PdMeshCore().NodeCount();
 			
-					int dim = 2;
+					int dim = DOF;
 					m_GF.clear();
 					m_GF.resize(dim * nCount, 0);
 
@@ -75,10 +57,6 @@ namespace DLUT
 
 						double value = 0;
 						int curid = lp.Lcid();
-						if (lp.Dof() == 3 || lp.Dof() == 4 || lp.Dof() == 5 || lp.Dof() == 6)
-						{
-							continue;
-						}
 
 						if (pdModel.CurveExist(curid))
 						{
@@ -100,10 +78,7 @@ namespace DLUT
 					for (const TBoundarySpcNode& tbsn : pdModel.BoundarySpcNodes())
 					{
 						int nid = tbsn.Id();
-						if (tbsn.Dof() == 3 || tbsn.Dof() == 4 || tbsn.Dof() ==5 || tbsn.Dof() == 6)
-						{
-							continue;
-						}
+						
 						int curSeri = dim * nid + (tbsn.Dof() - 1);
 
 						for (const pair<int, double>& j_v : m_GK[curSeri])
@@ -164,7 +139,8 @@ namespace DLUT
 						}
 					}
 
-					cout << "set boundary:\t\t\t\t\t" << (clock() - start) / 1000. << endl;
+					cout << "Boundary Conditions:\t\t" << (clock() - start) / 1000. << endl;
+					start = clock();
 					
 					/************************************************************************/
 					/* 求解线性方程组						                                */
@@ -172,12 +148,12 @@ namespace DLUT
 					SparseMatrix<double> sparse_matrix_GK;
 					TransVecMap2SparseMatrix(m_GK, sparse_matrix_GK);
 					
-					cout << "transform to Sparse Matrix:\t\t\t" << (clock() - start) / 1000. << endl;
+					cout << "TransVecMap2SparseMatrix():\t" << (clock() - start) / 1000. << endl;
 					start = clock();
 
 					m_GD.clear();
 					m_GD.resize(dim * nCount, 0);
-
+		//			cout << sparse_matrix_GK << endl;
 					umf_solver(sparse_matrix_GK, m_GD, m_GF);
 					/************************************************************************/
 					/* 更新位移结果							                                */
@@ -189,9 +165,13 @@ namespace DLUT
 
 						node.Displacement().x() += m_GD[dim * nid];
 						node.Displacement().y() += m_GD[dim * nid + 1];
+						node.Displacement().z() += m_GD[dim * nid + 2];
+						node.Displacement().rx() += m_GD[dim * nid + 3];
+						node.Displacement().ry() += m_GD[dim * nid + 4];
+						node.Displacement().rz() += m_GD[dim * nid + 5];
 					}
 	
-					cout << "Update strain and strss:\t\t\t" << (clock() - start) / 1000. << endl;
+					cout << "umf_solver:\t\t\t" << (clock() - start) / 1000. << endl;
 				}
 				/************************************************************************/
 				/* 显式求解 中心差分法                                                  */
@@ -237,22 +217,6 @@ namespace DLUT
 							node.Velocity() = node.Velocity() + node.Acceleration() * time_interval;
 							node.Displacement() = node.Displacement() + node.Velocity() * time_interval;
 						});
-
-						/*parallel_for_each(nodeIds.begin(), nodeIds.end(), [&](int nid)
-							{
-								TPdNode& node = pdModel.PdMeshCore().Node(nid);
-								double nVolume = 0;
-								set<int> adjEleIds = node.AdjElementIds();
-								for (int adjEle : adjEleIds)
-								{
-									const TPdElement& element = pdModel.PdMeshCore().Element(adjEle);
-									nVolume += 0.25 * element.Area() * element.Thickness();
-								}
-
-								node.Acceleration() = (node.OuterForce() - node.InnerForce()) / (Rho * nVolume);
-
-
-							});*/
 					}
 				}
 				/************************************************************************/
@@ -356,7 +320,7 @@ namespace DLUT
 								/************************************************************************/
 								if (updateSK)
 								{
-									genSingleStiffness(element_i);
+									genSingleStiffnessPD(element_i);
 								}
 							}
 						});
@@ -407,36 +371,49 @@ namespace DLUT
 								horizon = element_i.SideLength() * DLUT::SAE::PERIDYNAMIC::RATIO_OF_HORIZON_MESHSIZE;
 							}
 
-							double& density = element_i.CalParas().density;
-							double& c = element_i.CalParas().c;
-							double& s0 = element_i.CalParas().s0;
+							double& cax = element_i.CalParas().cax;
+							double& cby = element_i.CalParas().cby;
+							double& cbz = element_i.CalParas().cbz;
+							double& ctor = element_i.CalParas().ctor;
+							double& csy = element_i.CalParas().csy;
 
 							double ri = element_i.Radius();
-							c = 9 * E / (PI * (pow(horizon, 3) - pow(ri, 3)));
-						//	c = 9 * E / (PI * (pow(horizon, 3)));
+							double D0 = E * pow(t, 3) / (12.0 * (1 - pow(PR, 2)));
+							cax = 6 * E / (PI * (pow(horizon, 3) - pow(ri, 3)) * (1 - PR) * t);
+							//	考虑剪切影响
+							double phi = 5 * (horizon - ri) / (2 * dx * sqrt(15 * (1 + PR)));
+							double lamda = phi / (phi - atan(phi));
+							cbz = lamda * E * (1 - 3 * PR) / (6 * PI * (horizon - ri) * (1 - pow(PR, 2)) * t);
+												
+							cby = 6 * D0 * (1 + PR) / (PI * (pow(horizon, 3) - pow(ri, 3)) * pow(t, 2));
+							ctor = 6 * D0 * (1 - 3 * PR) / (PI * (pow(horizon, 3) - pow(ri, 3)) * pow(t, 2));
 
-							s0 = sqrt((4 * PI * G0) / (9 * E * horizon));
+							double G = E / (2 * (1 + PR));
+							double k = 6.0 / 5.0;
+							csy = 6 * G / (k * PI * t * (pow(horizon, 3) - pow(ri, 3)));
 						});
-
 						/************************************************************************/
 						/* 计算所有Bond的单刚矩阵                                               */
 						/************************************************************************/
+						double start = clock();
 						parallel_for_each(eids.begin(), eids.end(), [&](int ei)
-						{
-							TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
-							genSingleStiffness(element_i);
-						});
+							{
+								TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
+								genSingleStiffnessPD(element_i);
+							});
+						double total_time = (clock() - start) / 1000;
+						cout << "genSingleStiffnessPD():\t\t" << total_time << endl;
 					}
 				}	
 				/************************************************************************/
 				/* 生成总刚矩阵		   		                                            */
 				/************************************************************************/
-				void				genGlobalStiffness()
+				void				genGlobalStiffnessPD()
 				{
 					TPdModel& pdModel = *m_pPdModel;
 
 					int nCount = pdModel.PdMeshCore().NodeCount();
-					int dim = 2;
+					int dim = DOF;
 					m_GK.clear();
 					m_GK.resize(dim * nCount);
 
@@ -469,7 +446,7 @@ namespace DLUT
 								}
 
 								const SingleStiffness& SK = bondInfo.second.SK();
-								int LenOfSK = 16;
+								int LenOfSK = 48;
 							
 								for (int row = 0; row < LenOfSK; ++row)
 								{
@@ -487,12 +464,18 @@ namespace DLUT
 				/************************************************************************/
 				/* 生成单元I与单元J之间的单刚矩阵                                       */
 				/************************************************************************/
-				void				genSingleStiffness(TPdElement& element_i)
+				void				genSingleStiffnessPD(TPdElement& element_i)
 				{
 					TPdModel& pdModel = *m_pPdModel;
 					TPart& part = pdModel.Part(element_i.PartId());
 					TSection& section = pdModel.Section(part.SectionId());
-					double thickness = section.GetSectionValue("THICKNESS");
+					double PR = pdModel.Material(part.MaterialId()).GetMatValue("PR");
+				
+					const double cax = element_i.CalParas().cax;
+					const double cby = element_i.CalParas().cby;
+					const double cbz = element_i.CalParas().cbz;
+					const double ctor = element_i.CalParas().ctor;
+					const double csy = element_i.CalParas().csy;
 
 					map<int, TPdBond>& familyBonds = element_i.FamilyElementBonds();
 					for (map<int, TPdBond>::iterator iter = familyBonds.begin();
@@ -503,57 +486,49 @@ namespace DLUT
 						const TPdElement& element_j = pdModel.PdMeshCore().Element(nj);
 
 						SingleStiffness& SK = bond_ij.SK();
-						SK.resize(16, 16);
+						SK.resize(48, 48);
 						SK.setZero();
 
-						const double c = element_i.CalParas().c;
 						double volume_scale = bond_ij.Volume() / (element_j.Area() * element_j.Thickness());
 
 						double s[2], t[2];
 						s[0] = t[0] = 1.0 / sqrt(3.0);
-						s[1] = t[1] = -s[0];
+						s[1] = t[1] = -s[0];												
 
-						MatrixXd k;
-						k.resize(2, 2);
-						k.setZero();
-
-						k(0, 0) = 1;
-						k(0, 1) = -1;
-						k(1, 0) = -1;
-						k(1, 1) = 1;
-
-						MatrixXd Te = Telem(element_i, element_j);
-						MatrixXd TE = TELEM(element_i, element_j);
+						MatrixXd Te = T_elem(element_i, element_j);
+						MatrixXd TE = T_ELEM(element_i, element_j);
 
 						for (int is = 0; is < 2; ++is)
 						{
 							for (int it = 0; it < 2; ++it)
 							{
 								TCoordinate Xi = element_i.CoordinateInElement(s[is], t[it]);
+								double thickness_i = element_i.Thickness();
 								double Ji = element_i.Jacobi(s[is], t[it]);
+								double ia = 0.5 * Distance_2pt<Vector3d>(element_i.Node(0).CoordinateCurrent(), element_i.Node(1).CoordinateCurrent());
+								double ib = 0.5 * Distance_2pt<Vector3d>(element_i.Node(1).CoordinateCurrent(), element_i.Node(2).CoordinateCurrent());;
 
 								for (int js = 0; js < 2; ++js)
 								{
 									for (int jt = 0; jt < 2; ++jt)
 									{
-										Eigen::MatrixXd Nij = N(s[is], t[it], s[js], t[jt]);
-
 										TCoordinate Xj = element_j.CoordinateInElement(s[js], t[jt]);
+										double thickness_j = element_j.Thickness();
 										double Jj = element_j.Jacobi(s[js], t[jt]);
+										
+										double ja = 0.5 * Distance_2pt<Vector3d>(element_j.Node(0).CoordinateCurrent(), element_j.Node(1).CoordinateCurrent());
+										double jb = 0.5 * Distance_2pt<Vector3d>(element_j.Node(1).CoordinateCurrent(), element_j.Node(2).CoordinateCurrent());;
 
-										double idist = Module<TCoordinate>(Xj - Xi);
+										double L = Module<TCoordinate>(Xj - Xi);
+										MatrixXd k = SK_LOCAL(cax, cby, cbz, ctor, csy, L, element_i.SideLength(), PR);
+										Eigen::MatrixXd Nij = N_IJ(s[is], t[it],ia, ib, s[js], t[jt], ja, jb);
 
 										//	方向要进行归一化处理
-										Eigen::Vector2d vec_ij = (Xj - Xi).block(0, 0, 2, 1) / idist;
+										Eigen::Vector3d vec_ij = Xj - Xi;
+										Eigen::MatrixXd Tb = T_b(vec_ij);
 
-										Eigen::MatrixXd Tb;
-										Tb.resize(2, 4);
-										Tb.setZero();
-
-										Tb(0, 0) = Tb(1, 2) = vec_ij.x();
-										Tb(0, 1) = Tb(1, 3) = vec_ij.y();
 										// 0.5表示bond正反都会计算一次
-										SK += 0.5 * volume_scale * c / idist * Ji * Jj * TE.transpose() * Nij.transpose() * Te * Tb.transpose() * k * Tb * Te.transpose() * Nij * TE;
+										SK += 0.5 * volume_scale * Ji * Jj * TE.transpose() * Nij.transpose() * Te * Tb.transpose() * k * Tb * Te.transpose() * Nij * TE * thickness_i * thickness_j;
 									}
 								}
 							}
@@ -594,18 +569,26 @@ namespace DLUT
 								const SingleStiffness& SK = iter->second.SK();
 
 								VectorXd DIS;
-								DIS.resize(16);
+								DIS.resize(48);
 								DIS.setZero();
 								int loop_Dis = 0;
 								for (int ni : nids_i)
 								{
 									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(ni).Displacement().x();
 									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(ni).Displacement().y();
+									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(ni).Displacement().z();
+									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(ni).Displacement().rx();
+									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(ni).Displacement().ry();
+									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(ni).Displacement().rz();
 								}
 								for (int nj : nids_j)
 								{
 									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(nj).Displacement().x();
 									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(nj).Displacement().y();
+									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(nj).Displacement().z();
+									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(nj).Displacement().rx();
+									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(nj).Displacement().ry();
+									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(nj).Displacement().rz();
 								}
 
 								iter->second.ForceOfBond() = SK * DIS;
@@ -629,86 +612,227 @@ namespace DLUT
 							{
 								pdModel.PdMeshCore().Node(ni).InnerForce().x() += FORCE[loop_force++];
 								pdModel.PdMeshCore().Node(ni).InnerForce().y() += FORCE[loop_force++];
+								pdModel.PdMeshCore().Node(ni).InnerForce().z() += FORCE[loop_force++];
+								pdModel.PdMeshCore().Node(ni).InnerForce().rx() += FORCE[loop_force++];
+								pdModel.PdMeshCore().Node(ni).InnerForce().ry() += FORCE[loop_force++];
+								pdModel.PdMeshCore().Node(ni).InnerForce().rz() += FORCE[loop_force++];
 							}
 							for (int nj : nids_j)
 							{
 								pdModel.PdMeshCore().Node(nj).InnerForce().x() += FORCE[loop_force++];
 								pdModel.PdMeshCore().Node(nj).InnerForce().y() += FORCE[loop_force++];
+								pdModel.PdMeshCore().Node(nj).InnerForce().z() += FORCE[loop_force++];
+								pdModel.PdMeshCore().Node(nj).InnerForce().rx() += FORCE[loop_force++];
+								pdModel.PdMeshCore().Node(nj).InnerForce().ry() += FORCE[loop_force++];
+								pdModel.PdMeshCore().Node(nj).InnerForce().rz() += FORCE[loop_force++];
 							}
 						}
 					}
 				}
 			private:
-				Eigen::MatrixXd N(double is, double it, double js, double jt)
+				Eigen::MatrixXd N_IJ(double is, double it, double ia, double ib, double js, double jt, double ja, double jb)
 				{
 					Eigen::MatrixXd Res;
-					Res.resize(4, 16);
+					Res.resize(12, 48);
 					Res.setZero();
-					double Ni1 = (1 - is) * (1 - it) / 4;
-					double Ni2 = (1 + is) * (1 - it) / 4;
-					double Ni3 = (1 + is) * (1 + it) / 4;
-					double Ni4 = (1 - is) * (1 + it) / 4;
-					Res(0, 0) = Res(1, 1) = Ni1;
-					Res(0, 2) = Res(1, 3) = Ni2;
-					Res(0, 4) = Res(1, 5) = Ni3;
-					Res(0, 6) = Res(1, 7) = Ni4;
 
-					double Nj1 = (1 - js) * (1 - jt) / 4;
-					double Nj2 = (1 + js) * (1 - jt) / 4;
-					double Nj3 = (1 + js) * (1 + jt) / 4;
-					double Nj4 = (1 - js) * (1 + jt) / 4;
-					Res(2, 8) = Res(3, 9) = Nj1;
-					Res(2, 10) = Res(3, 11) = Nj2;
-					Res(2, 12) = Res(3, 13) = Nj3;
-					Res(2, 14) = Res(3, 15) = Nj4;
+					double pI[4] = { -1, 1, 1, -1 };
+					double qI[4] = { -1, -1, 1, 1 };
+
+					Res.block(0, 0, 6, 6) = N_Ipq(is, it, pI[0], qI[0], ia, ib);
+					Res.block(0, 6, 6, 6) = N_Ipq(is, it, pI[1], qI[1], ia, ib);
+					Res.block(0, 12, 6, 6) = N_Ipq(is, it, pI[2], qI[2], ia, ib);
+					Res.block(0, 18, 6, 6) = N_Ipq(is, it, pI[3], qI[3], ia, ib);
+
+					Res.block(6, 24, 6, 6) = N_Ipq(js, jt, pI[0], qI[0], ja, jb);
+					Res.block(6, 30, 6, 6) = N_Ipq(js, jt, pI[1], qI[1], ja, jb);
+					Res.block(6, 36, 6, 6) = N_Ipq(js, jt, pI[2], qI[2], ja, jb);
+					Res.block(6, 42, 6, 6) = N_Ipq(js, jt, pI[3], qI[3], ja, jb);
 
 					return Res;
 				}
-				Eigen::MatrixXd Telem(const TPdElement& element_i, const TPdElement& element_j)
+				Eigen::MatrixXd T_elem(const TPdElement& element_i, const TPdElement& element_j)
 				{
-					TPdModel& pdModel = *m_pPdModel;
-
 					Eigen::MatrixXd Res;
-					Res.resize(4, 4);
+					Res.resize(12, 12);
 					Res.setZero();
 
 					Matrix3d Local_Ei = element_i.LocalCoorSystem();
 					Matrix3d Local_Ej = element_j.LocalCoorSystem();
 
-					Res.block(0, 0, 2, 2) = Local_Ei.block(0, 0, 2, 2);
-					Res.block(2, 2, 2, 2) = Local_Ej.block(0, 0, 2, 2);
+					Res.block(0, 0, 3, 3) = Local_Ei;
+					Res.block(3, 3, 3, 3) = Local_Ei;
+					Res.block(6, 6, 3, 3) = Local_Ej;
+					Res.block(9, 9, 3, 3) = Local_Ej;
 
 					return Res;
 				}
-				Eigen::MatrixXd TELEM(const TPdElement& element_i, const TPdElement& element_j)
+				Eigen::MatrixXd T_ELEM(const TPdElement& element_i, const TPdElement& element_j)
 				{
-					TPdModel& pdModel = *m_pPdModel;
 					Eigen::MatrixXd Res;
-					Res.resize(16, 16);
+					Res.resize(48, 48);
 					Res.setZero();
 
 					Matrix3d Local_Ei = element_i.LocalCoorSystem();
 					Matrix3d Local_Ej = element_j.LocalCoorSystem();
 
-					Res.block(0, 0, 2, 2) = Local_Ei.block(0, 0, 2, 2);
-					Res.block(2, 2, 2, 2) = Local_Ei.block(0, 0, 2, 2);
-					Res.block(4, 4, 2, 2) = Local_Ei.block(0, 0, 2, 2);
-					Res.block(6, 6, 2, 2) = Local_Ei.block(0, 0, 2, 2);
-
-					Res.block(8, 8, 2, 2) = Local_Ej.block(0, 0, 2, 2);
-					Res.block(10, 10, 2, 2) = Local_Ej.block(0, 0, 2, 2);
-					Res.block(12, 12, 2, 2) = Local_Ej.block(0, 0, 2, 2);
-					Res.block(14, 14, 2, 2) = Local_Ej.block(0, 0, 2, 2);
+					for (int loop = 0; loop < 8; ++loop)
+					{
+						Res.block(loop * 3, loop * 3, 3, 3) = Local_Ei;
+						Res.block((loop + 8) * 3, (loop + 8) * 3, 3, 3) = Local_Ej;
+					}
 
 					return Res;
 				}
-	
+				Eigen::Matrix3d LAMDA(const Vector3d& localVector)
+				{
+					Eigen::Matrix3d T;
+					T.setZero();
+
+					double idist = Module<Vector3d>(localVector);
+					double Cx = localVector.x() / idist;
+					double Cy = localVector.y() / idist;
+					double Cz = localVector.z() / idist;
+
+					if (Cz + ERR_VALUE > 1.0)
+					{
+						//	局部x轴与全局Z轴一致
+						T(0, 2) = 1;
+						T(1, 1) = 1;
+						T(2, 0) = -1;
+					}
+					else if (Cz - ERR_VALUE < -1.0)
+					{
+						//	局部x轴与全局Z轴方向相反
+						T(0, 2) = -1;
+						T(1, 1) = 1;
+						T(2, 0) = 1;
+					}
+					else
+					{
+						double D = sqrt(Cx * Cx + Cy * Cy);
+						T(0, 0) = Cx;
+						T(0, 1) = Cy;
+						T(0, 2) = Cz;
+
+						T(1, 0) = -Cy / D;
+						T(1, 1) = Cx / D;
+						T(1, 2) = 0;
+
+						T(2, 0) = -Cx * Cz / D;
+						T(2, 1) = -Cy * Cz / D;
+						T(2, 2) = D;
+					}
+					return T;
+				}
+				Eigen::MatrixXd T_b(const Vector3d& localVector)
+				{
+					Eigen::MatrixXd Res;
+					Res.resize(12, 12);
+					Res.setZero();
+					Eigen::Matrix3d lamda = LAMDA(localVector);
+					Res.block(0, 0, 3, 3) = lamda;
+					Res.block(3, 3, 3, 3) = lamda;
+					Res.block(6, 6, 3, 3) = lamda;
+					Res.block(9, 9, 3, 3) = lamda;
+
+					return Res;
+				}
+				Eigen::MatrixXd N_Ipq(double p, double q, double pI, double qI, double a, double b)
+				{
+					Eigen::MatrixXd Res;
+					Res.resize(6, 6);
+					Res.setZero();
+
+					Res(0, 0) = (1 + p * pI) * (1 + q * qI) / 4.0;
+					Res(1, 1) = Res(0, 0);
+
+					Res(2, 2) = -((1 + pI * p) * (1 + qI * q) * (p * p + q * q - pI * p - qI * q - 2)) / 8.0;
+					Res(2, 3) = b * qI * ((1 + pI * p) * (1 + qI * q) * (1 + qI * q) * (qI * q - 1))/ 8.0;
+					Res(2, 4) = -a * pI * ((1 + pI * p) * (1 + pI * p) * (1 + qI * q) * (pI * p - 1)) / 8.0;
+
+					Res(3, 2) = (-qI * (pI * p + 1) * (3 * q * q + p * p - pI * p - 3)) / (b * 8.0);
+					Res(3, 3) = (b * (3 * qI * q - 1) * (1 + pI * p) * (1 + qI * q)) / (b * 8.0);
+					Res(3, 4) = (-a * pI * qI * (1 + pI * p) * (1 + pI * p) * (pI * p - 1)) / (b * 8.0);
+		
+					Res(4, 2) = (-pI * (qI * q + 1) * (3 * p * p + q * q - qI * q -3))/ (-a * 8.0);
+					Res(4, 3) = (b * pI * qI * (qI * q + 1) * (qI * q + 1) * (qI * q - 1)) / (-a * 8.0);
+					Res(4, 4) = (-a * (3 * pI * p - 1) * (pI * p + 1) * (qI * q + 1)) / (-a * 8.0);
+
+					Res(5, 5) = Res(0, 0);
+
+					return Res;
+				}
+				Eigen::MatrixXd SK_LOCAL(double cax, double cby, double cbz, double ctor, double csy, double L, double dx, double PR)
+				{
+					//double By = 12 * cby / (pow(L, 2) * csy);
+					//double Bz = 12 * (1 + PR) * pow(dx, 2) / (5 * pow(L, 2));
+					double By = 0;
+					double Bz = 0;
+
+					MatrixXd k;
+					k.resize(12, 12);
+					k.setZero();
+
+					k(0, 0) = cax / L;
+					k(0, 6) = -k(0, 0);
+
+					k(1, 1) = 12.0 * cbz / pow(L, 3) / (1 + Bz);
+					k(1, 5) = 6.0 * cbz / pow(L, 2) / (1 + Bz);
+					k(1, 7) = -k(1, 1);
+					k(1, 11) = k(1, 5);
+
+					k(2, 2) = 12.0 * cby / pow(L, 3) / (1 + By);
+					k(2, 4) = -6.0 * cby / pow(L, 2) / (1 + By);
+					k(2, 8) = -k(2, 2);
+					k(2, 10) = k(2, 4);
+
+					k(3, 3) = ctor / L;
+					k(3, 9) = -k(3, 3);
+
+					k(4, 2) = k(2, 4);
+					k(4, 4) = (4.0 + By) * cby / L / (1 + By);
+					k(4, 8) = -k(4, 2);
+					k(4, 10) = (2.0 - By) * cby / L / (1 + By);
+
+					k(5, 1) = k(1, 5);
+					k(5, 5) = (4.0 + Bz) * cbz / L / (1 + Bz);
+					k(5, 7) = -k(5, 1);
+					k(5, 11) = (2.0 - Bz) * cbz / L / (1 + Bz);
+
+					k(6, 0) = k(0, 6);
+					k(6, 6) = -k(6, 0);
+
+					k(7, 1) = k(1, 7);
+					k(7, 5) = k(5, 7);
+					k(7, 7) = -k(7, 1);
+					k(7, 11) = k(7, 5);
+
+					k(8, 2) = k(2, 8);
+					k(8, 4) = k(4, 8);
+					k(8, 8) = -k(8, 2);
+					k(8, 10) = k(8, 4);
+
+					k(9, 3) = k(3, 9);
+					k(9, 9) = -k(9, 3);
+
+					k(10, 2) = k(2, 10);
+					k(10, 4) = k(4, 10);
+					k(10, 8) = k(8, 10);
+					k(10, 10) = (4.0 + By) * cby / L / (1 + By);
+
+					k(11, 1) = k(1, 11);
+					k(11, 5) = k(5, 11);
+					k(11, 7) = k(7, 11);
+					k(11, 11) = (4.0 + Bz) * cbz / L / (1 + Bz);
+
+					return k;
+				}
 			private:
 				// F=K*D
 				vector<double>				m_GF;	//	Force vector
 				vector<double>				m_GD;	//	Displacement vector
 				vector< map<int, double> >	m_GK;	//	Stiffness matrix
-				vector< map<int, double> >	m_GM;	//	Mass matrix
 			private:
 				TPdModel*					m_pPdModel;
 			};
