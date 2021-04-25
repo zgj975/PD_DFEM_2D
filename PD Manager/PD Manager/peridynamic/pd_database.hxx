@@ -63,6 +63,7 @@ namespace DLUT
 
 					c = 0;
 					s0 = 0;
+					wc = 0;
 				}
 				~TPdCalculateParas() {}
 			public:
@@ -76,6 +77,7 @@ namespace DLUT
 
 				double	c;
 				double	s0;
+				double  wc;
 			};
 
 			//	PD Bond
@@ -604,8 +606,8 @@ namespace DLUT
 
 							for (int ej : eleIds)
 							{
-								if (ei == ej)
-									continue;
+							/*	if (ei == ej)
+									continue;*/
 								
 								TPdElement& element_j = m_pd_meshcore.Element(ej);
 								TCoordinate coor_j = element_j.CoordinateInElement(0, 0);

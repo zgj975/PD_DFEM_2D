@@ -18,7 +18,7 @@ namespace DLUT
 			typedef Eigen::Matrix<double, 6, 1> TAcceleration;
 			typedef Eigen::Matrix<double, 6, 1> TStress;
 			typedef Eigen::Matrix<double, 6, 1> TStrain;
-			typedef Eigen::Matrix<double, 6, 1> TMass;
+			typedef Eigen::MatrixXd SingleMass;
 			typedef Eigen::MatrixXd SingleStiffness;
 			const int IP_COUNT = 4;
 			const int DOF = 6;
@@ -43,8 +43,6 @@ namespace DLUT
 					m_velocity.setZero();
 					m_acceleration.setZero();
 
-					m_mass.setZero();
-
 					m_force_of_inner.setZero();
 					m_force_of_outer.setZero();
 				}
@@ -62,8 +60,6 @@ namespace DLUT
 					m_delta_displacement.setZero();
 					m_velocity.setZero();
 					m_acceleration.setZero();
-
-					m_mass.setZero();
 
 					m_force_of_inner.setZero();
 					m_force_of_outer.setZero();
@@ -130,8 +126,6 @@ namespace DLUT
 				TDisplacement&			IteratorDisplacement() { return m_iter_displacement; }
 				const TDisplacement&	IteratorDisplacement() const { return m_iter_displacement; }
 
-				TMass&					Mass() { return m_mass; }
-				const TMass&			Mass() const  { return m_mass; }
 			public:
 				TForce&					InnerForce() { return m_force_of_inner; }
 				const TForce&			InnerForce() const { return m_force_of_inner; }
@@ -152,8 +146,6 @@ namespace DLUT
 
 				TDisplacement			m_delta_displacement;				//	Incremental Displacement of current incremental step
 				TDisplacement			m_iter_displacement;				//	Iterator Displacement
-
-				TMass					m_mass;								//	Mass of this node
 			private:
 				TForce					m_force_of_inner;					//	Inner force of this node, such as PD bond force, FEM node force...
 				TForce					m_force_of_outer;					//	Outer force of this node, such as Body force, Interface force...
@@ -465,6 +457,8 @@ namespace DLUT
 
 				SingleStiffness&			SK() { return m_single_stiffness; }
 				const SingleStiffness&		SK() const { return m_single_stiffness; }
+				SingleMass&					SM() { return m_single_mass; }
+				const SingleMass&			SM() const { return m_single_mass; }
 
 				TIntegrationPoint&			IP(int index) { return m_IP[index]; }
 				const TIntegrationPoint&	IP(int index) const { return m_IP[index]; }
@@ -483,6 +477,7 @@ namespace DLUT
 				Matrix3d			m_local_coord_system;			//	Local coordinate system of the element
 			private:
 				SingleStiffness		m_single_stiffness;				//	Single Stiffness Matrix of this element
+				SingleMass			m_single_mass;					//	Single Mass Matrix of this element
 				vector<TIntegrationPoint>	m_IP;					//	Integration Points of this element
 			private:
 				vector<TNodeBase>&	ref_nodes;						//	Node Data
@@ -597,8 +592,8 @@ namespace DLUT
 				void				AddSeparateElement(int eid)
 				{
 					TElement& element = Element(eid);
-					//	只有是FEM网格，且是可断裂区，才能对网格进行PD网格的离散
-					if (element.AnalysisElementType() != PD_ELEMENT &&
+					//	只有是可断裂的PD区域，才能对网格进行PD网格的离散
+					if (element.AnalysisElementType() == PD_ELEMENT &&
 						element.CalParas().b_facture == true)
 					{					
 						const vector<int>& nids_old = element.NodeIds();
@@ -996,6 +991,34 @@ namespace DLUT
 				Vector3d		m_start;
 				Vector3d		m_end;
 			};
+
+			/************************************************************************/
+			/* Generate Transform matrix through axis and angle                     */
+			/************************************************************************/
+			Matrix3d RotationMatrix(const Vector3d& n, double angle)
+			{
+				Eigen::Matrix3d R;
+				double nx = n(0);
+				double ny = n(1);
+				double nz = n(2);
+
+				double C = cos(angle);
+				double S = sin(angle);
+
+				R(0, 0) = nx * nx * (1 - C) + C;
+				R(0, 1) = nx * ny * (1 - C) - nz * S;
+				R(0, 2) = nx * nz * (1 - C) + ny * S;
+
+				R(1, 0) = ny * nx * (1 - C) + nz * S;
+				R(1, 1) = ny * ny * (1 - C) + C;
+				R(1, 2) = ny * nz * (1 - C) - nx * S;
+
+				R(2, 0) = nz * nx * (1 - C) - ny * S;
+				R(2, 1) = nz * ny * (1 - C) + nx * S;
+				R(2, 2) = nz * nz * (1 - C) + C;
+
+				return R;
+			}
 		}
 	}
 }

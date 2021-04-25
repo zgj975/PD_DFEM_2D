@@ -87,7 +87,7 @@ namespace DLUT
 			public:
 				void		ExplicitAnalysis()
 				{								
-					int plot_frames = m_iterator_nums / m_plot_frames;
+					int plot_frames = (int)(ceil((double)m_iterator_nums / m_plot_frames));
 					//	Step 1: Read Pre-Process information
 					fun_initPreData();
 					seri_ascii.OutputHwAscii(0);

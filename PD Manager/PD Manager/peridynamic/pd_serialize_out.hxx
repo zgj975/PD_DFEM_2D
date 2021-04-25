@@ -76,12 +76,7 @@ namespace DLUT
 
 					fprintf(fout, "ALTAIR ASCII FILE\n");
 					fprintf(fout, "$TITLE\t = Transient analysis\n");
-					fprintf(fout, "$SUBCASE\t = 1\tSubcase\t1\n");
-					fprintf(fout, "$BINDING\t = NODE\n"); 
-				//	fprintf(fout, "$BINDING\t = ELEMENT\n");
-					fprintf(fout, "$COLUMN_INFO\t = ENTITY_ID\n");
-					fprintf(fout, "$RESULT_TYPE\t = Displacement(v), DamageIndex(s)\n");
-				//	fprintf(fout, "$RESULT_TYPE\t = DamageIndex(s)\n");
+					fprintf(fout, "$SUBCASE\t = 1\tSubcase\t1\n");					
 				}
 				void		OutputHwAscii(double curtime)
 				{
@@ -93,8 +88,11 @@ namespace DLUT
 					/************************************************************************/
 					/* 按照有限元节点输出物理量                                             */
 					/************************************************************************/
+					fprintf(fout, "$BINDING\t = NODE\n");
+					fprintf(fout, "$COLUMN_INFO\t = ENTITY_ID\n");
+					fprintf(fout, "$RESULT_TYPE\t = Displacement(v)\n");
+				
 					const set<int>& femNodeIds = pdModel.PdMeshCore().GetNodeIdsByAll();
-
 					for (int nid : femNodeIds)
 					{
 						const TPdNode& node = pdModel.PdMeshCore().Node(nid);
@@ -114,6 +112,24 @@ namespace DLUT
 						}
 						damageIndex /= (int)(adjElems.size());
 						fprintf(fout, "%20.10E", damageIndex);
+
+						fprintf(fout, "\n");
+					}
+
+					/************************************************************************/
+					/* 按照有限元单元输出物理量                                             */
+					/************************************************************************/
+					fprintf(fout, "$BINDING\t = ELEMENT\n");
+					fprintf(fout, "$COLUMN_INFO\t = ENTITY_ID\n");
+					fprintf(fout, "$RESULT_TYPE\t = DamageIndex(s)\n");
+
+					const set<int> femElemIds = pdModel.PdMeshCore().GetElementIdsByAll();
+					for (int eid : femElemIds)
+					{
+						const TPdElement& element = pdModel.PdMeshCore().Element(eid);
+						fprintf(fout, "%15d", element.Id() + 1);
+
+						fprintf(fout, "%20.10E", element.DamageIndex());
 
 						fprintf(fout, "\n");
 					}

@@ -43,8 +43,9 @@ namespace DLUT
 					int nCount = pdModel.PdMeshCore().NodeCount();
 			
 					int dim = DOF;
-					m_GF.clear();
-					m_GF.resize(dim * nCount, 0);
+					vector<double> FORCE;	//	Force vector
+					FORCE.clear();
+					FORCE.resize(dim * nCount, 0);
 
 					for (const TLoadNodePoint& lp : pdModel.LoadNodePoints())
 					{
@@ -69,7 +70,7 @@ namespace DLUT
 						}
 
 						int row = dim * nid + (lp.Dof() - 1);
-						m_GF[row] = value;
+						FORCE[row] = value;
 					}
 
 					/************************************************************************/
@@ -92,7 +93,7 @@ namespace DLUT
 						m_GK[curSeri].clear();
 						m_GK[curSeri][curSeri] = 1;
 
-						m_GF[curSeri] = 0;
+						FORCE[curSeri] = 0;
 					}
 
 					/************************************************************************/
@@ -134,7 +135,7 @@ namespace DLUT
 								double Krr = m_GK[k][k];
 								m_GK[k][k] = Krr * 10E10;
 
-								m_GF[k] = Krr * b * 10E10;
+								FORCE[k] = Krr * b * 10E10;
 							}
 						}
 					}
@@ -151,10 +152,11 @@ namespace DLUT
 					cout << "TransVecMap2SparseMatrix():\t" << (clock() - start) / 1000. << endl;
 					start = clock();
 
-					m_GD.clear();
-					m_GD.resize(dim * nCount, 0);
+					vector<double> DISPLACEMENT;
+					DISPLACEMENT.clear();
+					DISPLACEMENT.resize(dim * nCount, 0);
 		//			cout << sparse_matrix_GK << endl;
-					umf_solver(sparse_matrix_GK, m_GD, m_GF);
+					umf_solver(sparse_matrix_GK, DISPLACEMENT, FORCE);
 					/************************************************************************/
 					/* 更新位移结果							                                */
 					/************************************************************************/
@@ -163,12 +165,12 @@ namespace DLUT
 					{
 						TPdNode& node = pdModel.PdMeshCore().Node(nid);
 
-						node.Displacement().x() += m_GD[dim * nid];
-						node.Displacement().y() += m_GD[dim * nid + 1];
-						node.Displacement().z() += m_GD[dim * nid + 2];
-						node.Displacement().rx() += m_GD[dim * nid + 3];
-						node.Displacement().ry() += m_GD[dim * nid + 4];
-						node.Displacement().rz() += m_GD[dim * nid + 5];
+						node.Displacement().x() += DISPLACEMENT[dim * nid];
+						node.Displacement().y() += DISPLACEMENT[dim * nid + 1];
+						node.Displacement().z() += DISPLACEMENT[dim * nid + 2];
+						node.Displacement().rx() += DISPLACEMENT[dim * nid + 3];
+						node.Displacement().ry() += DISPLACEMENT[dim * nid + 4];
+						node.Displacement().rz() += DISPLACEMENT[dim * nid + 5];
 					}
 	
 					cout << "umf_solver:\t\t\t" << (clock() - start) / 1000. << endl;
@@ -206,14 +208,15 @@ namespace DLUT
 						parallel_for_each(nodeIds.begin(), nodeIds.end(), [&](int nid)
 						{
 							TPdNode& node = pdModel.PdMeshCore().Node(nid);
-							double nVolume = 0;
-							set<int> adjEleIds = node.AdjElementIds();
-							for (int adjEle : adjEleIds)
-							{
-								const TPdElement& element = pdModel.PdMeshCore().Element(adjEle);
-								nVolume += 0.25 * element.Area() * element.Thickness();
-							}
-							node.Acceleration() = (node.OuterForce() - node.InnerForce()) / (Rho * nVolume);
+							
+							int nodePos = node.Id() * DOF;
+							node.Acceleration().x() = (node.OuterForce().x() - node.InnerForce().x()) / m_GM[nodePos][nodePos];
+							node.Acceleration().y() = (node.OuterForce().y() - node.InnerForce().y()) / m_GM[nodePos + 1][nodePos + 1];
+							node.Acceleration().z() = (node.OuterForce().z() - node.InnerForce().z()) / m_GM[nodePos + 2][nodePos + 2];
+							node.Acceleration().rx() = (node.OuterForce().rx() - node.InnerForce().rx()) / m_GM[nodePos + 3][nodePos + 3];
+							node.Acceleration().ry() = (node.OuterForce().ry() - node.InnerForce().ry()) / m_GM[nodePos + 4][nodePos + 4];
+							node.Acceleration().rz() = (node.OuterForce().rz() - node.InnerForce().rz()) / m_GM[nodePos + 5][nodePos + 5];
+
 							node.Velocity() = node.Velocity() + node.Acceleration() * time_interval;
 							node.Displacement() = node.Displacement() + node.Velocity() * time_interval;
 						});
@@ -238,8 +241,13 @@ namespace DLUT
 						parallel_for_each(eids.begin(), eids.end(), [&](int ei)
 						{
 							TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
-							double s0 = element_i.CalParas().s0;
 							bool updateSK = false;
+
+							const double cax = element_i.CalParas().cax;
+							const double cby = element_i.CalParas().cby;
+							const double cbz = element_i.CalParas().cbz;
+							const double ctor = element_i.CalParas().ctor;
+							const double wc = element_i.CalParas().wc;
 
 							if (element_i.CalParas().b_facture)
 							{
@@ -249,29 +257,44 @@ namespace DLUT
 								{
 									int ej = (*iter).first;
 									TPdElement& element_j = pdModel.PdMeshCore().Element(ej);
-									if (element_j.CalParas().b_facture)
+									double vj = element_j.Area() * element_j.Thickness();
+									if (element_j.CalParas().b_facture && (element_i.Id() != element_j.Id()))
 									{
-										//const TCoordinate& Xi = element_i.CoordinateInElement(0, 0);
-										//const TDisplacement& Di = element_i.DisplaceInElement(0, 0);
+										const TCoordinate& Xi = element_i.CoordinateInElement(0, 0);
+										const TDisplacement& Di = element_i.DisplaceInElement(0, 0);
 
-										//const TCoordinate& Xj = element_j.CoordinateInElement(0, 0);
-										//const TDisplacement& Dj = element_j.DisplaceInElement(0, 0);
+										const TCoordinate& Xj = element_j.CoordinateInElement(0, 0);
+										const TDisplacement& Dj = element_j.DisplaceInElement(0, 0);
 
-										//double idist = Distance_2pt<Vector3d>(Xi, Xj);
-										//double nlength = Distance_2pt<Vector3d>(Xi + Di.block(0, 0, 3, 1), Xj + Dj.block(0, 0, 3, 1));
-										//double s = abs((nlength - idist) / idist);
-										//if (s > s0)
-										//{
-										//	++iter;
-										//	element_i.DeleteFamilyElement(element_j.Id());
-										////	element_j.DeleteFamilyElement(element_i.Id());
-										//	updateSK = true;
-										//}
-										//else
-										//{
-										//	++iter;
-										//}
-										vector<double> countForS;
+										Eigen::Vector3d vec_ij = Xj - Xi;
+										Eigen::MatrixXd Tb = T_b(vec_ij);
+
+										double L = Module<TCoordinate>(Xj - Xi);
+										MatrixXd k = SK_LOCAL(cax, cby, cbz, ctor, L);
+
+										VectorXd disp;
+										disp.resize(12);
+										disp.setZero();
+										disp.block(0, 0, 6, 1) = Di;
+										disp.block(6, 0, 6, 1) = Dj;
+
+										double w_bond = 0.5 * disp.transpose() * Tb.transpose() * k * Tb * disp;
+
+										/*double idist = Distance_2pt<Vector3d>(Xi, Xj);
+										double nlength = Distance_2pt<Vector3d>(Xi + Di.block(0, 0, 3, 1), Xj + Dj.block(0, 0, 3, 1));
+										double s = abs((nlength - idist) / idist);*/
+										if (w_bond > wc)
+										{
+											++iter;
+											element_i.DeleteFamilyElement(element_j.Id());
+				
+											updateSK = true;
+										}
+										else
+										{
+											++iter;
+										}
+									/*	vector<double> countForS;
 										countForS.clear();
 										for (int is = 0; is < 2; ++is)
 										{
@@ -308,7 +331,7 @@ namespace DLUT
 										else
 										{
 											++iter;
-										}
+										}*/
 									}
 									else
 									{
@@ -343,13 +366,13 @@ namespace DLUT
 						/************************************************************************/
 						/*  获取材料参数                                                        */
 						/************************************************************************/					
-						double E, PR, Rho, G0;
+						double E, PR, Rho, Gc;
 						if (material.Name() == "MAT_ELASTIC")
 						{
 							E= material.GetMatValue("E");
 							PR = material.GetMatValue("PR");
 							Rho = material.GetMatValue("Rho");
-							G0 = material.GetMatValue("STRESS_TENSILE");
+							Gc = material.GetMatValue("STRESS_TENSILE");
 						}
 						double t = section.GetSectionValue("THICKNESS");
 
@@ -366,34 +389,17 @@ namespace DLUT
 							double& cby = element_i.CalParas().cby;
 							double& cbz = element_i.CalParas().cbz;
 							double& ctor = element_i.CalParas().ctor;
-							double& csy = element_i.CalParas().csy;
+							double& wc = element_i.CalParas().wc;
 
 							double ri = element_i.Radius();
 							double D0 = E * pow(t, 3) / (12.0 * (1 - pow(PR, 2)));
-							switch (DLUT::SAE::PERIDYNAMIC::INFLUENCE_FUNC)
-							{
-								// g(xi, delta) = 1;
-							case 1:
-							{
-								cax = 6 * E / (PI * (pow(horizon, 3) - pow(ri, 3)) * (1 - PR) * t);
-								cbz = E * (1 - 3 * PR) / (6 * PI * (horizon - ri) * (1 - pow(PR, 2)) * t);
-								cby = 6 * D0 * (1 + PR) / (PI * (pow(horizon, 3) - pow(ri, 3)) * pow(t, 2));
-								ctor = 6 * D0 * (1 - 3 * PR) / (PI * (pow(horizon, 3) - pow(ri, 3)) * pow(t, 2));
-							}
-								break;
-								// g(xi, delta) = 1 - xi/delta;
-							case 2:
-							{
-								cax = 6 * E / (PI * (pow(horizon, 3) - pow(ri, 3)) * (1 - PR) * t);
-								cbz = E * (1 - 3 * PR) / (6 * PI * (horizon - ri) * (1 - pow(PR, 2)) * t);
-								cby = 6 * D0 * (1 + PR) / (PI * (pow(horizon, 3) - pow(ri, 3)) * pow(t, 2));
-								ctor = 6 * D0 * (1 - 3 * PR) / (PI * (pow(horizon, 3) - pow(ri, 3)) * pow(t, 2));
-							}
-								break;
-							
-							default:
-								break;
-							}
+
+							cax = 6 * E / (PI * pow(horizon, 3) * (1 - PR) * t);
+							cbz = E * (1 - 3 * PR) / (6 * PI * horizon * (1 - pow(PR, 2)) * t);
+							cby = 6 * D0 * (1 + PR) / (PI * pow(horizon, 3) * pow(t, 2));
+							ctor = 6 * D0 * (1 - 3 * PR) / (PI * pow(horizon, 3) * pow(t, 2));
+
+							wc = (3 * Gc) / (2 * t * pow(horizon, 3));
 						});
 						/************************************************************************/
 						/* 计算所有Bond的单刚矩阵                                               */
@@ -406,6 +412,14 @@ namespace DLUT
 							});
 						double total_time = (clock() - start) / 1000;
 						cout << "genSingleStiffnessPD():\t\t" << total_time << endl;
+
+						/************************************************************************/
+						/* 计算所有单元的质量矩阵                                  */
+						/************************************************************************/
+						start = clock();
+						genGlobalMassPD();
+						total_time = (clock() - start) / 1000;
+						cout << "genGlobalMassPD():\t\t" << total_time << endl;
 					}
 				}	
 				/************************************************************************/
@@ -495,7 +509,7 @@ namespace DLUT
 
 						double s[2], t[2];
 						s[0] = t[0] = 1.0 / sqrt(3.0);
-						s[1] = t[1] = -s[0];												
+						s[1] = t[1] = -s[0];
 
 						MatrixXd Te = T_elem(element_i, element_j);
 						MatrixXd TE = T_ELEM(element_i, element_j);
@@ -515,13 +529,19 @@ namespace DLUT
 									for (int jt = 0; jt < 2; ++jt)
 									{
 										TCoordinate Xj = element_j.CoordinateInElement(s[js], t[jt]);
+										//	长度为0，表示计算到了自己本身
+										double L = Module<TCoordinate>(Xj - Xi);
+										if (L < ERR_VALUE)
+										{
+											break;
+										}
+
 										double thickness_j = element_j.Thickness();
 										double Jj = element_j.Jacobi(s[js], t[jt]);
 										
 										double ja = 0.5 * Distance_2pt<Vector3d>(element_j.Node(0).CoordinateCurrent(), element_j.Node(1).CoordinateCurrent());
 										double jb = 0.5 * Distance_2pt<Vector3d>(element_j.Node(1).CoordinateCurrent(), element_j.Node(2).CoordinateCurrent());;
 
-										double L = Module<TCoordinate>(Xj - Xi);
 										MatrixXd k = SK_LOCAL(cax, cby, cbz, ctor, L);
 										Eigen::MatrixXd Nij = N_IJ(s[is], t[it],ia, ib, s[js], t[jt], ja, jb);
 
@@ -533,6 +553,47 @@ namespace DLUT
 										SK += 0.5 * volume_scale * g(L,element_i.Horizon()) * Ji * Jj * TE.transpose() * Nij.transpose() * Te * Tb.transpose() * k * Tb * Te.transpose() * Nij * TE * thickness_i * thickness_j;
 									}
 								}
+							}
+						}
+					}
+				}
+				/************************************************************************/
+				/* 生成质量矩阵		  				                                    */
+				/************************************************************************/
+				void				genGlobalMassPD()
+				{
+					TPdModel& pdModel = *m_pPdModel;
+
+					int nCount = pdModel.PdMeshCore().NodeCount();
+					m_GM.clear();
+					m_GM.resize(DOF * nCount);
+
+					for (const TPart& part : pdModel.Parts())
+					{
+						const set<int> eids = part.GetElementIds();
+						const TMaterial& material = pdModel.Material(part.MaterialId());
+						double Rho = material.GetMatValue("Rho");
+
+						/************************************************************************/
+						/* 组装质量矩阵                                                         */
+						/************************************************************************/
+						for (int ei : eids)
+						{
+							const TPdElement& element = pdModel.PdMeshCore().Element(ei);
+							//	将单元I和单元J对应的节点放入一个nids，长度为8
+							const vector<int>& nids = element.NodeIds();
+							double h = element.Thickness();
+							double A = element.Area();
+							for (int ni : nids)
+							{
+								int CurPos = ni * DOF;
+								m_GM[CurPos][CurPos] += Rho * A * h / 4.0;
+								m_GM[CurPos+1][CurPos+1] += Rho * A * h / 4.0;
+								m_GM[CurPos+2][CurPos+2] += Rho * A * h / 4.0;
+
+								m_GM[CurPos+3][CurPos+3] += Rho * A * pow(h,3) / 24.0;
+								m_GM[CurPos+4][CurPos+4] += Rho * A * pow(h, 3) / 24.0;
+								m_GM[CurPos+5][CurPos+5] += Rho * A * pow(h, 3) / 12.0;
 							}
 						}
 					}
@@ -827,6 +888,10 @@ namespace DLUT
 				}
 				double			g(double xi, double delta)
 				{
+					if (xi > delta)
+					{
+						xi = delta;
+					}
 					double res = 0;
 					switch (DLUT::SAE::PERIDYNAMIC::INFLUENCE_FUNC)
 					{
@@ -841,11 +906,9 @@ namespace DLUT
 					}
 					return res;
 				}
-			private:
-				// F=K*D
-				vector<double>				m_GF;	//	Force vector
-				vector<double>				m_GD;	//	Displacement vector
+			private:			
 				vector< map<int, double> >	m_GK;	//	Stiffness matrix
+				vector< map<int, double> >  m_GM;	//	Mass matrix
 			private:
 				TPdModel*					m_pPdModel;
 			};

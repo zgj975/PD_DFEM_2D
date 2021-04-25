@@ -505,7 +505,10 @@ namespace DLUT
 						else if (string("*SET_SHELL_LIST_TITLE") == line)
 						{
 							getline(fin, line);
-							string setName = line;
+							string setName;
+							stringstream input(line);
+							input >> setName;
+
 							getline(fin, line);
 							int setId = ParseString<int>(line.substr(0, line.length()-1));
 
@@ -529,8 +532,8 @@ namespace DLUT
 
 										if (setName == "PD")
 										{
-											pdModel.PdMeshCore().Element(eid_local).AnalysisElementType() = PD_ELEMENT;
-										}
+											pdModel.PdMeshCore().Element(eid_local).AnalysisElementType() = PD_ELEMENT;											
+										} 
 										else if (setName == "NON-FRACTURE")
 										{
 											pdModel.PdMeshCore().Element(eid_local).CalParas().b_facture = false;
