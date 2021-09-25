@@ -151,17 +151,15 @@ namespace DLUT
 				bool&					ShouldBeUpdate() { return m_b_update; }
 			private:
 				int						m_eid_j;				//	Element J
-				double					m_volume_index;				//	Modified volume
+				double					m_volume_index;			//	Modified volume
 				vector<TPdBond>			m_bonds;				//	TPdBonds.
 				SingleStiffness			m_single_stiffness;		//	Single stiffness matrix of Bond_ij
 				Eigen::VectorXd			m_force;				//	FORCE vector of Element_ij
 				bool					m_b_update;				//	SK should be updated?
 			};
 
-			//typedef map<int, TPdFamilyElement>	MAP_NJ_FAMILY_ELEMENT;
-			//typedef pair<int, TPdFamilyElement> PAIR_NJ_FAMILY_ELEMENT;
-
-			typedef vector<TPdFamilyElement> VEC_FAMILY_ELEMENT;
+			typedef map<int, TPdFamilyElement>	MAP_NJ_FAMILY_ELEMENT;
+			typedef pair<int, TPdFamilyElement> PAIR_NJ_FAMILY_ELEMENT;
 
 			typedef TNodeBase TPdNode;
 			//	Element
@@ -170,7 +168,7 @@ namespace DLUT
 			public:
 				TPdElement(vector<TNodeBase>& vecNode) : TElementBase(vecNode)
 				{
-					m_vec_family_elements.clear();
+					m_map_family_elements.clear();
 					m_d_init_bond_nums = 0;
 					m_alpha = 0;
 				}
@@ -178,32 +176,16 @@ namespace DLUT
 				void					Dispose()
 				{
 					TElementBase::Dispose();
-				}
-			/*	const TPdElement& operator=(const TPdElement& right)
-				{
-					TElementBase::operator=(right);
-					m_map_family_elements = right.m_map_family_elements;
-					m_pd_paras = right.m_pd_paras;
-					m_d_init_bond_nums = right.m_d_init_bond_nums;
-
-					return *this;
-				}*/
+				}				
 			public:
 				//	The family nodes informations and operations
-	/*			int						FamilyElementCount() const { return (int)m_map_family_elements.size(); }
+				int						FamilyElementCount() const { return (int)m_map_family_elements.size(); }
 				MAP_NJ_FAMILY_ELEMENT&	FamilyElements() { return m_map_family_elements; }
 				const MAP_NJ_FAMILY_ELEMENT& FamilyElements() const { return m_map_family_elements; }
 				TPdFamilyElement&		FamilyElement(int eId) { return m_map_family_elements[eId]; }
 				void					InsertFamilyElement(int eId, double volume_index) { m_map_family_elements.insert(pair<int, TPdFamilyElement>(eId, TPdFamilyElement(eId, volume_index))); }
 				void					DeleteFamilyElement(int eId) { m_map_family_elements.erase(eId); }
-				void					ClearFamilyElements() { m_map_family_elements.clear(); }*/
-
-				int						FamilyElementCount() const { return (int)m_vec_family_elements.size(); }
-				VEC_FAMILY_ELEMENT&		FamilyElements() { return m_vec_family_elements; }
-				const VEC_FAMILY_ELEMENT& FamilyElements() const { return m_vec_family_elements; }
-				void					InsertFamilyElement(int eId, double volume_index) { m_vec_family_elements.push_back(TPdFamilyElement(eId, volume_index)); }
-				void					ClearFamilyElements() { m_vec_family_elements.clear(); }
-				TPdFamilyElement&		LastOfFamilyElement() { return m_vec_family_elements.back(); }
+				void					ClearFamilyElements() { m_map_family_elements.clear(); }
 			public:
 				const TPdCalculateParas&	CalParas() const { return m_pd_paras; }
 				TPdCalculateParas&			CalParas() { return m_pd_paras; }
@@ -211,9 +193,10 @@ namespace DLUT
 				void					InitDamageIndex()
 				{
 					m_d_init_bond_nums = 0;
-					const VEC_FAMILY_ELEMENT& familyElems = FamilyElements();
-					for (const TPdFamilyElement& family_elem : familyElems)
+					const MAP_NJ_FAMILY_ELEMENT& familyElems = FamilyElements();
+					for (const PAIR_NJ_FAMILY_ELEMENT& mnt : familyElems)
 					{
+						const TPdFamilyElement& family_elem = mnt.second;
 						const vector<TPdBond>& bonds = family_elem.Bonds();
 						for (const TPdBond& bond : bonds)
 						{
@@ -224,12 +207,14 @@ namespace DLUT
 						}
 					}
 				}
+			public:
 				double					DamageIndex() const
 				{
 					double invalid_bond_nums = 0;
-					const VEC_FAMILY_ELEMENT& familyElems = FamilyElements();
-					for (const TPdFamilyElement& family_elem : familyElems)
+					const MAP_NJ_FAMILY_ELEMENT& mnfes = FamilyElements();
+					for (const PAIR_NJ_FAMILY_ELEMENT& pnfe : mnfes)
 					{
+						const TPdFamilyElement& family_elem = pnfe.second;
 						const vector<TPdBond>& bonds = family_elem.Bonds();
 						for (const TPdBond& bond : bonds)
 						{
@@ -247,11 +232,9 @@ namespace DLUT
 				double&					Alpha() { return m_alpha; }
 
 			private:
-//				MAP_NJ_FAMILY_ELEMENT	m_map_family_elements;				//	Bond informations
-				VEC_FAMILY_ELEMENT		m_vec_family_elements;  			//	Bond informations
+				MAP_NJ_FAMILY_ELEMENT	m_map_family_elements;				//	Bond informations
 				TPdCalculateParas		m_pd_paras;							//	Calculate parameters of PD Element
 				double					m_d_init_bond_nums;					//	Initial volumes for damage calculation
-
 			private:
 				double					m_alpha;							//	Alpha index for the coupling model
 			};
@@ -496,8 +479,7 @@ namespace DLUT
 				//	Update the *PART informations into PD MODEL
 				void				UpdatePartInfo()
 				{	
-					double start, end, cost;
-					start = clock();
+					double start = clock();
 					if (PartCounts() == 0)
 					{
 						cout << "ERROR: Have no any part information in this LSDYNA file!" << endl;
@@ -582,14 +564,13 @@ namespace DLUT
 							}
 						}
 					}
-					end = clock();
-					cost = end - start;
-					cout << "Update Part Informations, Cost time = " << cost / 1000 << endl;
+
+					double total_time = (clock() - start) / 1000;
+					cout << "UpdatePartInfo(): \t" << total_time << endl;
 				}
 				void				UpdateFamilyInParts()
 				{
-					double start, end, cost;
-					start = clock();
+					double start = clock();
 					//	First, delete all exist family information
 					for (int loop = 0; loop < m_pd_meshcore.ElementCount(); ++loop)
 					{
@@ -628,7 +609,7 @@ namespace DLUT
 							int iter_for_adj = (int)(ceil(horizon / dx));
 							set<int> ejIds = m_pd_meshcore.GetAdjElements(ei, iter_for_adj);
 							for (int ej : ejIds)
-							{								
+							{				
 								TPdElement& element_j = m_pd_meshcore.Element(ej);
 								TCoordinate coor_j = element_j.CoordinateInElement(0, 0);
 
@@ -644,16 +625,13 @@ namespace DLUT
 										if (intersect_volume_index > 0)
 										{
 											element_i.InsertFamilyElement(ej, intersect_volume_index);
+											
 											for (int is = 0; is < IP_COUNT_2D; ++is)
 											{
 												TIntegrationPoint& xi = element_i.IP(is);
 												for (int js = 0; js < IP_COUNT_2D; ++js)
 												{
 													TIntegrationPoint& xj = element_j.IP(js);
-													if (element_i.Id() == element_j.Id() && xi.Index() == xj.Index())
-													{
-														continue;
-													}
 													Matrix3d bond_local_coor_sys;
 													bond_local_coor_sys.setZero();
 													Vector3d lx = xj.Coordinate() - xi.Coordinate();
@@ -666,8 +644,7 @@ namespace DLUT
 													bond_local_coor_sys.block(1, 0, 1, 3) = ly.transpose();
 													bond_local_coor_sys.block(2, 0, 1, 3) = lz.transpose();
 
-													//	刚插入的FamilyElement进行Bond信息更新
-													element_i.LastOfFamilyElement().AddBond(xi, xj, bond_local_coor_sys);
+													element_i.FamilyElement(ej).AddBond(xi, xj, bond_local_coor_sys);
 												}
 											}											
 											//	根据单元位置信息，计算耦合标量函数的信息alpha										
@@ -686,67 +663,66 @@ namespace DLUT
 							}
 						}
 						//	Thirdly, divide the total domain into PD, FEM, and MORPHING domain, respectively.
-						//for (int ei : eleIds)
-						//{
-						//	TPdElement& element_i = m_pd_meshcore.Element(ei);
-						//	MAP_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
-						//	if (element_i.Alpha() > (1.0 - ERR_VALUE))
-						//	{
-						//		bool is_pd = true;
-						//		for (MAP_NJ_FAMILY_ELEMENT::iterator iter = familyElements.begin();
-						//			iter != familyElements.end(); ++iter)
-						//		{
-						//			TPdElement& element_j = PdMeshCore().Element((*iter).first);
-						//			if (element_j.Alpha() < 1.0)
-						//			{
-						//				is_pd = false;
-						//				break;
-						//			}
-						//		}
-						//		if (is_pd)
-						//		{
-						//			element_i.AnalysisElementType() = PD_ELEMENT;
-						//			//	将所有PD单元设置成离散单元
-						//			m_pd_meshcore.AddSeparateElement(ei);
-						//		}
-						//		else
-						//		{
-						//			element_i.AnalysisElementType() = MORPHING_ELEMENT;
-						//		}
-						//	}
-						//	else if (element_i.Alpha() < ERR_VALUE)
-						//	{
-						//		element_i.AnalysisElementType() = FEM_ELEMENT;
-						//		bool is_fem = true;
-						//		for (MAP_NJ_FAMILY_ELEMENT::iterator iter = familyElements.begin();
-						//			iter != familyElements.end(); ++iter)
-						//		{
-						//			TPdElement& element_j = PdMeshCore().Element((*iter).first);
-						//			if (element_j.Alpha() > ERR_VALUE)
-						//			{
-						//				is_fem = false;
-						//				break;
-						//			}
-						//		}
-						//		if (is_fem)
-						//		{
-						//			element_i.AnalysisElementType() = FEM_ELEMENT;
-						//		}
-						//		else
-						//		{
-						//			element_i.AnalysisElementType() = MORPHING_ELEMENT;
-						//		}
-						//	}
-						//	else
-						//	{
-						//		element_i.AnalysisElementType() = MORPHING_ELEMENT;
-						//	}
-						//}
+						for (int ei : eleIds)
+						{
+							TPdElement& element_i = m_pd_meshcore.Element(ei);
+							MAP_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+							if (element_i.Alpha() > (1.0 - ERR_VALUE))
+							{
+								bool is_pd = true;
+								for (MAP_NJ_FAMILY_ELEMENT::iterator iter = familyElements.begin();
+									iter != familyElements.end(); ++iter)
+								{
+									TPdElement& element_j = PdMeshCore().Element((*iter).first);
+									if (element_j.Alpha() < 1.0)
+									{
+										is_pd = false;
+										break;
+									}
+								}
+								if (is_pd)
+								{
+									element_i.AnalysisElementType() = PD_ELEMENT;
+									//	将所有PD单元设置成离散单元
+									m_pd_meshcore.AddSeparateElement(ei);
+								}
+								else
+								{
+									element_i.AnalysisElementType() = MORPHING_ELEMENT;
+								}
+							}
+							else if (element_i.Alpha() < ERR_VALUE)
+							{
+								element_i.AnalysisElementType() = FEM_ELEMENT;
+								bool is_fem = true;
+								for (MAP_NJ_FAMILY_ELEMENT::iterator iter = familyElements.begin();
+									iter != familyElements.end(); ++iter)
+								{
+									TPdElement& element_j = PdMeshCore().Element((*iter).first);
+									if (element_j.Alpha() > ERR_VALUE)
+									{
+										is_fem = false;
+										break;
+									}
+								}
+								if (is_fem)
+								{
+									element_i.AnalysisElementType() = FEM_ELEMENT;
+								}
+								else
+								{
+									element_i.AnalysisElementType() = MORPHING_ELEMENT;
+								}
+							}
+							else
+							{
+								element_i.AnalysisElementType() = MORPHING_ELEMENT;
+							}
+						}
 					}
 
-					end = clock();
-					cost = end - start;
-					cout << "Update Family Informations, Cost time = " << cost / 1000 << endl;
+					double total_time = (clock() - start) / 1000;
+					cout << "UpdateFamilyInParts(): \t" << total_time << endl;
 				}
 			public:
 				//	Refresh the *BOUNDARY_SPC_NODE informations into PD MODEL
@@ -940,17 +916,19 @@ namespace DLUT
 							parallel_for_each(eids.begin(), eids.end(), [&](int ei) {
 								TPdElement& element_i = m_pd_meshcore.Element(ei);
 								const TCoordinate& ei_coord = element_i.CoordinateInElement(0, 0);
-								VEC_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
-								for (TPdFamilyElement& family_elem : familyElements)
+								MAP_NJ_FAMILY_ELEMENT& familyBonds = element_i.FamilyElements();
+
+								for (MAP_NJ_FAMILY_ELEMENT::iterator iter = familyBonds.begin();
+									iter != familyBonds.end(); ++iter)
 								{
-									int ej = family_elem.Id();
+									int ej = iter->first;
 									TPdElement& element_j = m_pd_meshcore.Element(ej);
 									const TCoordinate& ej_coord = element_j.CoordinateInElement(0, 0);
 
 									bool res = IsTowLineIntersect_xy_plane<Vector3d>(ei_coord, ej_coord, crevice.Start(), crevice.End());
-									//	如果单元I与J的中心点连线与初始裂缝相交，则所有的Bond均失效
 									if (res)
 									{
+										TPdFamilyElement& family_elem = iter->second;
 										vector<TPdBond>& bonds = family_elem.Bonds();
 										for (TPdBond& bond : bonds)
 										{
@@ -971,9 +949,9 @@ namespace DLUT
 					double start = clock();
 					//	Set FamilyNodeCount for Initial Damage Value
 					set<int> eleIds = m_pd_meshcore.GetElementIdsByAll();
-					for (int eid : eleIds)
+					for (int i : eleIds)
 					{
-						TPdElement& element = m_pd_meshcore.Element(eid);
+						TPdElement& element = m_pd_meshcore.Element(i);
 						element.InitDamageIndex();
 					}
 

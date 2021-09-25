@@ -39,19 +39,14 @@ namespace DLUT
 			public:				
 				void		ReadLsdynaFile(string filename, TPdModel& pdModel)
 				{
-					double start, end, cost;
-					start = clock();
-					readMeshData(filename, pdModel);
-					end = clock();
-					cost = end - start;
-					cout << "Finished to read Meah Datas, Cost time = " << cost / 1000 << endl;
+					double start = clock();
 
-					start = clock();
+					readMeshData(filename, pdModel);
 					readCalculateInfo(filename, pdModel);
 					readBoundaryInfo(filename, pdModel);
-					end = clock();
-					cost = end - start;
-					cout << "Finished to read Calculation parameters and boundary conditions, Cost time = " << cost / 1000 << endl;
+
+					double total_time = (clock() - start) / 1000;
+					cout << "ReadLsdynaFile(): \t\t" << total_time << endl;
 				}
 				void		WriteLsdynaFile(string filename, TPdModel& pdModel)
 				{
