@@ -13,21 +13,13 @@ $HISTORY$
 #ifndef DLUT_SAE_PERIDYNAMIC_PD_DATABASE_HXX_20171220
 #define DLUT_SAE_PERIDYNAMIC_PD_DATABASE_HXX_20171220
 
-#define EIGEN_USE_MKL_ALL
-#define EIGEN_VECTORIZE_SSE4_2
-
 #include <map>
 #include <string>
-#include "Eigen/Dense"
-#include "Eigen/IterativeLinearSolvers"
-#include "Eigen/SparseLU"
-#include "Eigen/Eigenvalues"
+
 #include "UMF/umfSolver.h"
 
-using namespace Eigen;
-using namespace std;
-
 #include "pd_base_toolkit.hxx"
+#include "fem_shape_functions.hxx"
 #include "fem_database.hxx"
 #include <ppl.h>
 using namespace concurrency;
@@ -41,145 +33,227 @@ namespace DLUT
 			static double RATIO_OF_HORIZON_MESHSIZE = 3.0;
 			static double HORIZON = 3.0;
 			static bool USE_CONSTANT_HORIZON = TRUE;
-			static int INFLUENCE_FUNC = 1;
-						
+			static int MAX_INTERATOR_NUMS = 100;
+			static double CONVERGENCE_FACTOR = 0.001;
 			/************************************************************************/
-			/* ����Beam PDʱ���ڵ����6�����ɶ�,����BBPDʱ���ڵ����3�����ɶ�       */
+			/* 采用Beam PD时，节点采用6个自由度,采用BBPD时，节点采用3个自由度       */
 			/************************************************************************/
-			typedef Eigen::MatrixXd SingleStiffness;
-
 			class TPdCalculateParas
 			{
 			public:
 				TPdCalculateParas()
 				{
-					cax = 0;
-					cby = 0;
-					cbz = 0;
-					ctor = 0;
-					csy = 0;
-					density = 0;
-					b_facture = true;
+					D_PD.setZero();
 
-					c = 0;
-					s0 = 0;
-					wc = 0;
+					sed_criterion = 0;
 				}
 				~TPdCalculateParas() {}
 			public:
-				double	cax;
-				double	cby;
-				double	cbz;
-				double	ctor;
-				double	csy;
-				double	density;
-				bool	b_facture;
-
-				double	c;
-				double	s0;
-				double  wc;
+				Eigen::Matrix4d D_PD;
+				
+				double	sed_criterion;
 			};
 
-			//	PD Bond
+			typedef TIntegrationPointTemp<TStrain, TStress> TBondPoint;
+			typedef TIntegrationPointTemp<TStrain_Bond, TStress_Bond> TBondIntegrationPoint;
 			class TPdBond
 			{
 			public:
-				TPdBond(double volume, TCoordinate center)
+				TPdBond(TBondPoint& xi, TBondPoint& xj, const Matrix3d& bond_local_coor_sys)
+					: m_xi(xi), m_xj(xj)
 				{
-					m_volume = volume;
-					m_center = center;
+					m_local_coord_system = bond_local_coor_sys;
+					m_IP.clear();
+					m_IP.resize(IP_COUNT_1D);
+					m_micro_potential = 0;
+					m_b_is_valid = true;
 				}
-				TPdBond(double volume = 0)
-				{
-					m_volume = volume;
-					m_center.setZero();
-				}
-				~TPdBond() {}
 			public:
-				Eigen::VectorXd&			ForceOfBond() { return m_force; }
-				const Eigen::VectorXd&		ForceOfBond() const { return m_force; }
+				TBondPoint&			Xi() { return m_xi; }
+				const TBondPoint&	Xi() const { return m_xi; }
+				TBondPoint&			Xj() { return m_xj; }
+				const TBondPoint&	Xj() const { return m_xj; }
+				double				BondLength() const
+				{
+					return Distance_2pt(m_xi.Coordinate(), m_xj.Coordinate());
+				}
+			public:
+				Matrix3d&			LocalCoorSystem() { return m_local_coord_system; }
+				const Matrix3d&		LocalCoorSystem() const { return m_local_coord_system; }
+				//	键的局部坐标系与全局坐标系的转换矩阵
+				Eigen::MatrixXd		T_b() const
+				{
+					Eigen::MatrixXd Res;
+					Res.resize(12, 12);
+					Res.setZero();
 
-				double&						Volume() { return m_volume; }
-				double						Volume() const { return m_volume; }
-				
-				TCoordinate&				ShapeCenter() { return m_center; }
-				const TCoordinate&			ShapeCenter() const { return m_center; }
+					Res.block(0, 0, 3, 3) = m_local_coord_system;
+					Res.block(3, 3, 3, 3) = m_local_coord_system;
+					Res.block(6, 6, 3, 3) = m_local_coord_system;
+					Res.block(9, 9, 3, 3) = m_local_coord_system;
 
-				SingleStiffness&			SK() { return m_single_stiffness; }
-				const SingleStiffness&		SK() const { return m_single_stiffness; }
+					return Res;
+				}
+			public:
+				TBondIntegrationPoint&			IP(int index) { return m_IP[index]; }
+				const TBondIntegrationPoint&	IP(int index) const { return m_IP[index]; }
+			public:
+				double						MicroPotential() const { return m_micro_potential; }
+				double&						MicroPotential() { return m_micro_potential; }
+				bool						IsValid() const { return m_b_is_valid; }
+				void						MakeFailure() { m_b_is_valid = false; }
 			private:
-				/************************************************************************/
-				/* F=K*d                                   */
-				/************************************************************************/
-				double						m_volume;				//	Modified volume of NODE_j
-				TCoordinate					m_center;				//	Shape center of NODE_j
-				Eigen::MatrixXd				m_single_stiffness;		//	Single stiffness matrix of Bond_ij
-				Eigen::VectorXd				m_force;				//	FORCE vector of Bond_ij
+				double						m_micro_potential;
+				bool						m_b_is_valid;
+			private:
+				Matrix3d					m_local_coord_system;	//	Local coordinate system of the bond
+			private:
+				vector<TBondIntegrationPoint>	m_IP;					//	Integration Points of this bond
+			private:
+				//	组成TPdBond的是两个单元中的积分点
+				TBondPoint& m_xi;					//	Xi;
+				TBondPoint& m_xj;					//	Xj;
 			};
 
-			typedef map<int, TPdBond>		MAP_NJ_TPDBOND;
+			class TPdFamilyElement
+			{
+			public:
+				TPdFamilyElement(int eid = -1, double volume_index = 0)
+				{
+					m_eid_j = eid;
+					m_volume_index = volume_index;
+					m_bonds.clear();
+					m_b_update = true;
+				}
+			public:
+				int						Id() const { return m_eid_j; }
+				double&					VolumeIndex() { return m_volume_index; }
+				double					VolumeIndex() const { return m_volume_index; }
+			public:
+				void					AddBond(TBondPoint& xi, TBondPoint& xj, const Matrix3d& bond_local_coor_sys = Matrix3d().Identity())
+				{
+					//	两个积分点不为同一个值才能形成一根bond
+					if (&xi != &xj)
+					{
+						m_bonds.push_back(TPdBond(xi, xj, bond_local_coor_sys));
+					}
+				}
+				TPdBond&				Bond(int index) { return m_bonds[index]; }
+				const TPdBond&			Bond(int index) const { return m_bonds[index]; }
+				vector<TPdBond>&		Bonds() { return m_bonds; }
+				const vector<TPdBond>&	Bonds() const { return m_bonds; }
+			public:
+				SingleStiffness&		SK() { return m_single_stiffness; }
+				const SingleStiffness&	SK() const { return m_single_stiffness; }
+				Eigen::VectorXd&		ForceOfBond() { return m_force; }
+				const Eigen::VectorXd&	ForceOfBond() const { return m_force; }
+				const bool				ShouldBeUpdate() const { return m_b_update; }
+				bool&					ShouldBeUpdate() { return m_b_update; }
+			private:
+				int						m_eid_j;				//	Element J
+				double					m_volume_index;				//	Modified volume
+				vector<TPdBond>			m_bonds;				//	TPdBonds.
+				SingleStiffness			m_single_stiffness;		//	Single stiffness matrix of Bond_ij
+				Eigen::VectorXd			m_force;				//	FORCE vector of Element_ij
+				bool					m_b_update;				//	SK should be updated?
+			};
+
+			//typedef map<int, TPdFamilyElement>	MAP_NJ_FAMILY_ELEMENT;
+			//typedef pair<int, TPdFamilyElement> PAIR_NJ_FAMILY_ELEMENT;
+
+			typedef vector<TPdFamilyElement> VEC_FAMILY_ELEMENT;
 
 			typedef TNodeBase TPdNode;
 			//	Element
 			class TPdElement : public TElementBase
 			{
 			public:
-				TPdElement(vector<TNodeBase>& vecNode) : TElementBase(vecNode) {}
+				TPdElement(vector<TNodeBase>& vecNode) : TElementBase(vecNode)
+				{
+					m_vec_family_elements.clear();
+					m_d_init_bond_nums = 0;
+					m_alpha = 0;
+				}
 			public:
 				void					Dispose()
 				{
 					TElementBase::Dispose();
 				}
-				const TPdElement& operator=(const TPdElement& right)
+			/*	const TPdElement& operator=(const TPdElement& right)
 				{
 					TElementBase::operator=(right);
-					m_map_family_bonds = right.m_map_family_bonds;
+					m_map_family_elements = right.m_map_family_elements;
 					m_pd_paras = right.m_pd_paras;
-					m_d_init_volumes = right.m_d_init_volumes;
-					m_horizon = right.m_horizon;
+					m_d_init_bond_nums = right.m_d_init_bond_nums;
 
 					return *this;
-				}
+				}*/
 			public:
 				//	The family nodes informations and operations
-				int						FamilyElementCount() const { return (int)m_map_family_bonds.size(); }
-				MAP_NJ_TPDBOND&			FamilyElementBonds() { return m_map_family_bonds; }
-				const MAP_NJ_TPDBOND&	FamilyElementBonds() const { return m_map_family_bonds; }
-				TPdBond&				FamilyElementBond(int eId) { return m_map_family_bonds[eId]; }
-				void					InsertFamilyElement(int eId, double volume, TCoordinate center) { m_map_family_bonds.insert(pair<int, TPdBond>(eId, TPdBond(volume, center))); }
-				void					DeleteFamilyElement(int eId) { m_map_family_bonds.erase(eId); }
-				void					ClearFamilyElements() { m_map_family_bonds.clear(); }
+	/*			int						FamilyElementCount() const { return (int)m_map_family_elements.size(); }
+				MAP_NJ_FAMILY_ELEMENT&	FamilyElements() { return m_map_family_elements; }
+				const MAP_NJ_FAMILY_ELEMENT& FamilyElements() const { return m_map_family_elements; }
+				TPdFamilyElement&		FamilyElement(int eId) { return m_map_family_elements[eId]; }
+				void					InsertFamilyElement(int eId, double volume_index) { m_map_family_elements.insert(pair<int, TPdFamilyElement>(eId, TPdFamilyElement(eId, volume_index))); }
+				void					DeleteFamilyElement(int eId) { m_map_family_elements.erase(eId); }
+				void					ClearFamilyElements() { m_map_family_elements.clear(); }*/
+
+				int						FamilyElementCount() const { return (int)m_vec_family_elements.size(); }
+				VEC_FAMILY_ELEMENT&		FamilyElements() { return m_vec_family_elements; }
+				const VEC_FAMILY_ELEMENT& FamilyElements() const { return m_vec_family_elements; }
+				void					InsertFamilyElement(int eId, double volume_index) { m_vec_family_elements.push_back(TPdFamilyElement(eId, volume_index)); }
+				void					ClearFamilyElements() { m_vec_family_elements.clear(); }
+				TPdFamilyElement&		LastOfFamilyElement() { return m_vec_family_elements.back(); }
 			public:
 				const TPdCalculateParas&	CalParas() const { return m_pd_paras; }
 				TPdCalculateParas&			CalParas() { return m_pd_paras; }
 			public:
 				void					InitDamageIndex()
 				{
-					m_d_init_volumes = 0;
-					const MAP_NJ_TPDBOND& familyBonds = FamilyElementBonds();
-					for (const pair<int, TPdBond>& mnt : familyBonds)
+					m_d_init_bond_nums = 0;
+					const VEC_FAMILY_ELEMENT& familyElems = FamilyElements();
+					for (const TPdFamilyElement& family_elem : familyElems)
 					{
-						m_d_init_volumes += mnt.second.Volume();
+						const vector<TPdBond>& bonds = family_elem.Bonds();
+						for (const TPdBond& bond : bonds)
+						{
+							if (bond.IsValid())
+							{
+								m_d_init_bond_nums += 1;
+							}
+						}
 					}
 				}
 				double					DamageIndex() const
 				{
-					double current_volumes = 0;
-					const MAP_NJ_TPDBOND& familyBonds = FamilyElementBonds();
-					for (const pair<int, TPdBond>& mnt : familyBonds)
+					double invalid_bond_nums = 0;
+					const VEC_FAMILY_ELEMENT& familyElems = FamilyElements();
+					for (const TPdFamilyElement& family_elem : familyElems)
 					{
-						current_volumes += mnt.second.Volume();
+						const vector<TPdBond>& bonds = family_elem.Bonds();
+						for (const TPdBond& bond : bonds)
+						{
+							if (!bond.IsValid())
+							{
+								invalid_bond_nums += 1;
+							}
+						}
 					}
-					return (1.0 - (current_volumes / m_d_init_volumes));
+					return invalid_bond_nums / m_d_init_bond_nums;
 				}
+
 			public:
-				double&					Horizon() { return m_horizon; }
-				double					Horizon() const { return m_horizon; }
+				double					Alpha() const { return m_alpha; }
+				double&					Alpha() { return m_alpha; }
+
 			private:
-				MAP_NJ_TPDBOND			m_map_family_bonds;					//	Bond informations
+//				MAP_NJ_FAMILY_ELEMENT	m_map_family_elements;				//	Bond informations
+				VEC_FAMILY_ELEMENT		m_vec_family_elements;  			//	Bond informations
 				TPdCalculateParas		m_pd_paras;							//	Calculate parameters of PD Element
-				double					m_d_init_volumes;					//	Initial volumes for damage calculation
-				double					m_horizon;							//	Horizon of this element
+				double					m_d_init_bond_nums;					//	Initial volumes for damage calculation
+
+			private:
+				double					m_alpha;							//	Alpha index for the coupling model
 			};
 			
 			typedef TMeshCoreTemplate<TPdNode, TPdElement> TPdMeshCore;
@@ -202,10 +276,6 @@ namespace DLUT
 					m_vec_sections.clear();
 					m_vec_curves.clear();
 
-					m_vec_boundary_spc_nodes.clear();
-					m_vec_initial_velocity_nodes.clear();
-					m_vec_load_node_points.clear();
-					m_vec_boundary_prescribed_motions.clear();
 					m_vec_crevice.clear();
 				}
 			public:
@@ -244,7 +314,7 @@ namespace DLUT
 					for (int loop = 0; loop < (int)(m_vec_parts.size()); ++loop)
 					{
 						TPart& cur_part = m_vec_parts[loop];
-						//	�����ͬ��ID�ŵ�PART���������Ϣ����
+						//	如果有同样ID号的PART，则更新信息即可
 						if (cur_part.Id() == part.Id())
 						{
 							m_vec_parts[loop] = part;
@@ -252,7 +322,7 @@ namespace DLUT
 							break;
 						}
 					}
-					//	���������ͬ��ID��PART�����²���һ��
+					//	如果不存在同样ID的PART，则新插入一个
 					if (!b_exist)
 					{
 						m_vec_parts.push_back(part);
@@ -402,38 +472,6 @@ namespace DLUT
 				int							CurveCounts() const { return (int)(m_vec_curves.size()); }
 				int							CurveId(int i_count) { return m_vec_curves[i_count].Id(); }
 				const vector<TCurve>&		Curves() { return m_vec_curves; }
-			public:
-				//	*BOUNDARY_SPC_NODE informations into PD MODEL
-				void						AddBounarySpcNode(const TBoundarySpcNode& boundary)
-				{
-					m_vec_boundary_spc_nodes.push_back(boundary);
-				}
-				const vector<TBoundarySpcNode>&	BoundarySpcNodes() const { return m_vec_boundary_spc_nodes; }
-				vector<TBoundarySpcNode>&	BoundarySpcNodes() { return m_vec_boundary_spc_nodes; }
-
-				//	*INITIAL_VELOCITY informations into PD MODEL
-				void						AddInitialVelocityNode(const TInitialVelocityNode& initvel)
-				{
-					m_vec_initial_velocity_nodes.push_back(initvel);
-				}
-				const vector<TInitialVelocityNode>&	InitialVelocityNodes() const { return m_vec_initial_velocity_nodes; }
-				vector<TInitialVelocityNode>&	InitialVelocityNodes() { return m_vec_initial_velocity_nodes; }
-
-				//	*LOAD_NODE_POINT informations into PD MODEL
-				void						AddLoadNodePoint(const TLoadNodePoint& loadnode)
-				{
-					m_vec_load_node_points.push_back(loadnode);
-				}
-				const vector<TLoadNodePoint>& LoadNodePoints() const { return m_vec_load_node_points; }
-				vector<TLoadNodePoint>&		LoadNodePoints() { return m_vec_load_node_points; }
-
-				//	*BOUNDARY_PRESCRIBED_MOTION_NODE information into the PD MODEL 
-				void						AddBoundaryPreMotionNode(const TBoundaryPrescribedMotion& motion)
-				{
-					m_vec_boundary_prescribed_motions.push_back(motion);
-				}
-				const vector<TBoundaryPrescribedMotion>& BoundaryPrescribedMotions() const { return m_vec_boundary_prescribed_motions; }
-				vector<TBoundaryPrescribedMotion>& BoundaryPrescribedMotions() { return m_vec_boundary_prescribed_motions; }
 				
 				//	Add the initial crevice into the PD model, and the crevice is *ELEMENT_SEATBELT
 				void						AddCrevice(const TCrevice& cre)
@@ -448,12 +486,7 @@ namespace DLUT
 				vector<TMaterial>					m_vec_materials;		//	*MAT
 				vector<TSection>					m_vec_sections;			//	*SECTION
 				vector<TCurve>						m_vec_curves;			//	*CURVE
-	
-				vector<TBoundarySpcNode>			m_vec_boundary_spc_nodes;				//	*BOUNDARY_SPC_NODE
-				vector<TInitialVelocityNode>		m_vec_initial_velocity_nodes;			//	*INITIAL_VELOCITY_NODE
-				vector<TLoadNodePoint>				m_vec_load_node_points;					//	*LOAD_NODE_POINT
-				vector<TBoundaryPrescribedMotion>	m_vec_boundary_prescribed_motions;		//	*BOUNDARY_PRESCRIBED_MOTION_NODE
-				vector<TCrevice>					m_vec_crevice;							//	*ELEMENT_SEATBELT
+				vector<TCrevice>					m_vec_crevice;			//	*ELEMENT_SEATBELT
 			};
 
 			//	PD instantiation model
@@ -463,30 +496,22 @@ namespace DLUT
 				//	Update the *PART informations into PD MODEL
 				void				UpdatePartInfo()
 				{	
-					double start = clock();
+					double start, end, cost;
+					start = clock();
 					if (PartCounts() == 0)
 					{
 						cout << "ERROR: Have no any part information in this LSDYNA file!" << endl;
 						return;
 					}
 					
-					//	在PD区域创建非连续伽辽金单元
-					set<int> eids = m_pd_meshcore.GetElementIdsByAll();
-					for (int eid : eids)
-					{
-						if (m_pd_meshcore.Element(eid).AnalysisElementType() == PD_ELEMENT)
-						{
-							m_pd_meshcore.AddSeparateElement(eid);
-						}
-					}
-				
+					//	获取Part的信息：单元编号、Section信息、材料信息等
 					for (int pid = 0; pid < PartCounts(); ++pid)
 					{
 						TPart& part = Part(PartId(pid));
 						
 						set<int> eids = m_pd_meshcore.GetElementIdsByPart(part.Id());
 						part.AddElementId(eids);
-						//	���õ�Ԫ��THICKNESS
+						//	设置单元的AREA
 						const TSection& section = Section(part.SectionId());
 						string stype = section.Type();
 						if (stype == "PLANE_STRESS" ||
@@ -497,20 +522,11 @@ namespace DLUT
 							{
 								TPdElement& pd_element = m_pd_meshcore.Element(eid);
 								pd_element.Thickness() = thickness;
-
-								if (DLUT::SAE::PERIDYNAMIC::USE_CONSTANT_HORIZON)
-								{
-									pd_element.Horizon() = DLUT::SAE::PERIDYNAMIC::HORIZON;
-								}
-								else
-								{
-									pd_element.Horizon() = pd_element.SideLength() * DLUT::SAE::PERIDYNAMIC::RATIO_OF_HORIZON_MESHSIZE;
-								}
 							}
 						}
 					}
 					
-					//	���²�����Ϣ
+					//	更新材料信息
 					for (const TPart& part : Parts())
 					{
 						if (!MaterialExist(part.MaterialId()))
@@ -529,6 +545,8 @@ namespace DLUT
 								set<int> nids = part.GetElementIds();
 								for (int nid : nids)
 								{
+									PdMeshCore().Node(nid).BoundarySpcNode().push_back(TBoundarySpcNode(1));
+									/*
 									switch (con1)
 									{
 									case 1:
@@ -559,18 +577,19 @@ namespace DLUT
 										break;
 									default:
 										break;
-									}
+									}*/
 								}
 							}
 						}
 					}
-
-					double total_time = (clock() - start) / 1000;
-					cout << "UpdatePartInfo():\t\t" << total_time << endl;
+					end = clock();
+					cost = end - start;
+					cout << "Update Part Informations, Cost time = " << cost / 1000 << endl;
 				}
 				void				UpdateFamilyInParts()
 				{
-					double start = clock();
+					double start, end, cost;
+					start = clock();
 					//	First, delete all exist family information
 					for (int loop = 0; loop < m_pd_meshcore.ElementCount(); ++loop)
 					{
@@ -584,8 +603,8 @@ namespace DLUT
 						const TSection& section = Section(sid);
 						string stype = section.Type();
 
-						const set<int> eleIds = part.GetElementIds();
-						parallel_for_each(eleIds.begin(), eleIds.end(), [&](int ei)
+						const set<int>& eleIds = part.GetElementIds();
+						for (int ei : eleIds)
 						{
 							TPdElement& element_i = m_pd_meshcore.Element(ei);
 							TCoordinate coor_i = element_i.CoordinateInElement(0, 0);
@@ -594,21 +613,22 @@ namespace DLUT
 							//	Extend the search range to include all nodes
 
 							double dis_for_juge = 0;
+							double horizon = 0;
 							if (DLUT::SAE::PERIDYNAMIC::USE_CONSTANT_HORIZON)
 							{
 								dis_for_juge = DLUT::SAE::PERIDYNAMIC::HORIZON + dx + ERR_VALUE;
+								horizon = DLUT::SAE::PERIDYNAMIC::HORIZON;
 							} 
 							else
 							{
-								double m = DLUT::SAE::PERIDYNAMIC::RATIO_OF_HORIZON_MESHSIZE + 1.0;
-								dis_for_juge = m * dx + ERR_VALUE;
+								dis_for_juge = (DLUT::SAE::PERIDYNAMIC::RATIO_OF_HORIZON_MESHSIZE + 1.0) * dx + ERR_VALUE;
+								horizon = DLUT::SAE::PERIDYNAMIC::RATIO_OF_HORIZON_MESHSIZE * dx;
 							}
 
-							for (int ej : eleIds)
-							{
-							/*	if (ei == ej)
-									continue;*/
-								
+							int iter_for_adj = (int)(ceil(horizon / dx));
+							set<int> ejIds = m_pd_meshcore.GetAdjElements(ei, iter_for_adj);
+							for (int ej : ejIds)
+							{								
 								TPdElement& element_j = m_pd_meshcore.Element(ej);
 								TCoordinate coor_j = element_j.CoordinateInElement(0, 0);
 
@@ -616,101 +636,203 @@ namespace DLUT
 									(abs(coor_i.y() - coor_j.y()) < dis_for_juge) &&
 									(abs(coor_i.z() - coor_j.z()) < dis_for_juge))
 								{
-									double xi = Distance_2pt(coor_i, coor_j);
-									if (xi < dis_for_juge)
+									double Len = Distance_2pt(coor_i, coor_j);
+									if (Len < dis_for_juge)
 									{
 										Vector3d cij;
-										double intersect_volume = CalModifiedVolume(element_i, element_j, stype, cij);
-										element_i.InsertFamilyElement(ej, intersect_volume, cij);
+										double intersect_volume_index = CalModifiedVolume(element_i, element_j, cij);
+										if (intersect_volume_index > 0)
+										{
+											element_i.InsertFamilyElement(ej, intersect_volume_index);
+											for (int is = 0; is < IP_COUNT_2D; ++is)
+											{
+												TIntegrationPoint& xi = element_i.IP(is);
+												for (int js = 0; js < IP_COUNT_2D; ++js)
+												{
+													TIntegrationPoint& xj = element_j.IP(js);
+													if (element_i.Id() == element_j.Id() && xi.Index() == xj.Index())
+													{
+														continue;
+													}
+													Matrix3d bond_local_coor_sys;
+													bond_local_coor_sys.setZero();
+													Vector3d lx = xj.Coordinate() - xi.Coordinate();
+													Vector3d lz = element_i.LocalCoorSystem().block(2, 0, 1, 3).transpose();
+													Vector3d ly = Fork_Multi<Vector3d, Vector3d>(lz, lx);
+													Normalizer<Vector3d>(lx);
+													Normalizer<Vector3d>(ly);
+													Normalizer<Vector3d>(lz);
+													bond_local_coor_sys.block(0, 0, 1, 3) = lx.transpose();
+													bond_local_coor_sys.block(1, 0, 1, 3) = ly.transpose();
+													bond_local_coor_sys.block(2, 0, 1, 3) = lz.transpose();
+
+													//	刚插入的FamilyElement进行Bond信息更新
+													element_i.LastOfFamilyElement().AddBond(xi, xj, bond_local_coor_sys);
+												}
+											}											
+											//	根据单元位置信息，计算耦合标量函数的信息alpha										
+											if (element_i.Alpha() > (1.0 - ERR_VALUE))
+											{
+												element_i.Alpha() = 1;
+												double alpha = CalAlpha(Len, horizon);
+												if (element_j.Alpha() < alpha)
+												{
+													element_j.Alpha() = alpha;
+												}
+											}
+										}
 									}
 								}
 							}
-						});
+						}
+						//	Thirdly, divide the total domain into PD, FEM, and MORPHING domain, respectively.
+						//for (int ei : eleIds)
+						//{
+						//	TPdElement& element_i = m_pd_meshcore.Element(ei);
+						//	MAP_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+						//	if (element_i.Alpha() > (1.0 - ERR_VALUE))
+						//	{
+						//		bool is_pd = true;
+						//		for (MAP_NJ_FAMILY_ELEMENT::iterator iter = familyElements.begin();
+						//			iter != familyElements.end(); ++iter)
+						//		{
+						//			TPdElement& element_j = PdMeshCore().Element((*iter).first);
+						//			if (element_j.Alpha() < 1.0)
+						//			{
+						//				is_pd = false;
+						//				break;
+						//			}
+						//		}
+						//		if (is_pd)
+						//		{
+						//			element_i.AnalysisElementType() = PD_ELEMENT;
+						//			//	将所有PD单元设置成离散单元
+						//			m_pd_meshcore.AddSeparateElement(ei);
+						//		}
+						//		else
+						//		{
+						//			element_i.AnalysisElementType() = MORPHING_ELEMENT;
+						//		}
+						//	}
+						//	else if (element_i.Alpha() < ERR_VALUE)
+						//	{
+						//		element_i.AnalysisElementType() = FEM_ELEMENT;
+						//		bool is_fem = true;
+						//		for (MAP_NJ_FAMILY_ELEMENT::iterator iter = familyElements.begin();
+						//			iter != familyElements.end(); ++iter)
+						//		{
+						//			TPdElement& element_j = PdMeshCore().Element((*iter).first);
+						//			if (element_j.Alpha() > ERR_VALUE)
+						//			{
+						//				is_fem = false;
+						//				break;
+						//			}
+						//		}
+						//		if (is_fem)
+						//		{
+						//			element_i.AnalysisElementType() = FEM_ELEMENT;
+						//		}
+						//		else
+						//		{
+						//			element_i.AnalysisElementType() = MORPHING_ELEMENT;
+						//		}
+						//	}
+						//	else
+						//	{
+						//		element_i.AnalysisElementType() = MORPHING_ELEMENT;
+						//	}
+						//}
 					}
-					double total_time = (clock() - start) / 1000;
-					cout << "UpdateFamilyInParts():\t\t" << total_time  << endl;
+
+					end = clock();
+					cost = end - start;
+					cout << "Update Family Informations, Cost time = " << cost / 1000 << endl;
 				}
 			public:
 				//	Refresh the *BOUNDARY_SPC_NODE informations into PD MODEL
 				void				RefreshBoundarySpcInfo()
 				{
-					for (const TBoundarySpcNode& tbsn : m_vec_boundary_spc_nodes)
+					const set<int>& nids = PdMeshCore().GetNodeIdsByAll();
+					for (int nid : nids)
 					{
-						int nid = tbsn.Id();						
-						int dof = tbsn.Dof() - 1;
-						m_pd_meshcore.Node(nid).Displacement()(dof) = 0;
+						TPdNode& node = PdMeshCore().Node(nid);
+						const vector<TBoundarySpcNode>& BSNs = node.BoundarySpcNode();
+						for (const TBoundarySpcNode& tbsn : BSNs)
+						{
+							int dof = tbsn.Dof() - 1;
+							node.Displacement()(dof) = 0;
+						}
 					}
 				}
 				//	Refresh the *INITIAL_VELOCITY informations into PD MODEL
 				void				RefreshInitVelocityInfo()
 				{
-					for (const TInitialVelocityNode& tivn : m_vec_initial_velocity_nodes)
+					const set<int>& nids = PdMeshCore().GetNodeIdsByAll();
+					for (int nid : nids)
 					{
-						int nid = tivn.Id();
-						m_pd_meshcore.Node(nid).Velocity() = tivn.Velocity();
-					}
+						TPdNode& node = PdMeshCore().Node(nid);
+						const vector<TInitialVelocityNode>& IVNs = node.InitVelocity();
+						for (const TInitialVelocityNode& tivn : IVNs)
+						{
+							node.Velocity() = tivn.Velocity();
+						}
+					}					
 				}
 				//	Refresh the *LOAD_NODE_POINT informations into PD MODEL
 				void				RefreshLoadNodeInfo(double cur_time)
-				{					
-					for (const TLoadNodePoint& tlnp : m_vec_load_node_points)
+				{				
+					const set<int>& nids = PdMeshCore().GetNodeIdsByAll();
+					for (int nid : nids)
 					{
-						int nid = tlnp.Id();						
-						int curid = tlnp.Lcid();
-						
-						double value_force = 0;
-						if (CurveExist(curid))
+						TPdNode& node = PdMeshCore().Node(nid);
+						const vector<TLoadNodePoint>& LNPs = node.LoadNodePoint();
+						for (const TLoadNodePoint& tlnp : LNPs)
 						{
-							TCurve& curve = Curve(curid);
-							value_force = curve.GetValueByX(cur_time) * tlnp.Sf();
-						}
-						else
-						{
-							//	û�����ߣ������������Ϊ��ֵ
-							value_force = tlnp.Sf();
-						}
-						
-						switch (tlnp.Dof())
-						{
-						case 1:
-						{
-							m_pd_meshcore.Node(nid).OuterForce().x() = value_force;
-							break;
-						}
-						case 2:
-						{
-							m_pd_meshcore.Node(nid).OuterForce().y() = value_force;
-							break;
-						}
-						case 3:
-						{
-							m_pd_meshcore.Node(nid).OuterForce().z() = value_force;
-							break;
-						}
-						default:
-							break;
+							int curid = tlnp.Lcid();
+
+							double value_force = 0;
+							if (CurveExist(curid))
+							{
+								TCurve& curve = Curve(curid);
+								value_force = curve.GetValueByX(cur_time) * tlnp.Sf();
+							}
+							else
+							{
+								value_force = tlnp.Sf();
+							}
+
+							switch (tlnp.Dof())
+							{
+							case 1:
+							{
+								node.OuterForce().x() = value_force;
+								break;
+							}
+							case 2:
+							{
+								node.OuterForce().y() = value_force;
+								break;
+							}
+							case 3:
+							{
+								node.OuterForce().z() = value_force;
+								break;
+							}
+							default:
+								break;
+							}
 						}
 					}
 				}
 				//	Refresh the *BOUNDARY_PRESCRIBED_MOTION_NODE information into the PD MODEL 
 				void				RefreshPreMotionInfo(double cur_time)
 				{	
-					for (const TBoundaryPrescribedMotion& bpm : m_vec_boundary_prescribed_motions)
+					const set<int>& nids = PdMeshCore().GetNodeIdsByAll();
+					for (int nid : nids)
 					{
-						string type = bpm.MotionType();
-						set<int> nids;
-						nids.clear();
-						if (type == "RIGID")
-						{
-							int partId = bpm.Id();
-							TPart& part = Part(partId);
-							nids = part.GetElementIds();
-						}
-						else if (type == "NODE")
-						{
-							nids.insert(bpm.Id());
-						}
-						for (int nid : nids)
+						TPdNode& node = PdMeshCore().Node(nid);
+						const vector<TBoundaryPrescribedMotion>& BPMs = node.BoundaryPreMotion();
+						for (const TBoundaryPrescribedMotion& bpm : BPMs)
 						{
 							int curid = bpm.Lcid();
 							double value = 0;
@@ -723,10 +845,10 @@ namespace DLUT
 							{
 								value = bpm.Sf();
 							}
-							
+
 							switch (bpm.Dof())
 							{
-							//	DOF=1 -> X translation
+								//	DOF=1 -> X translation
 							case 1:
 							{
 								switch (bpm.Vda())
@@ -818,24 +940,22 @@ namespace DLUT
 							parallel_for_each(eids.begin(), eids.end(), [&](int ei) {
 								TPdElement& element_i = m_pd_meshcore.Element(ei);
 								const TCoordinate& ei_coord = element_i.CoordinateInElement(0, 0);
-								MAP_NJ_TPDBOND& familyBonds = element_i.FamilyElementBonds();
-
-								for (MAP_NJ_TPDBOND::iterator iter = familyBonds.begin();
-									iter != familyBonds.end();)
+								VEC_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+								for (TPdFamilyElement& family_elem : familyElements)
 								{
-									int ej = iter->first;
+									int ej = family_elem.Id();
 									TPdElement& element_j = m_pd_meshcore.Element(ej);
 									const TCoordinate& ej_coord = element_j.CoordinateInElement(0, 0);
 
 									bool res = IsTowLineIntersect_xy_plane<Vector3d>(ei_coord, ej_coord, crevice.Start(), crevice.End());
+									//	如果单元I与J的中心点连线与初始裂缝相交，则所有的Bond均失效
 									if (res)
 									{
-										++iter;
-										element_i.DeleteFamilyElement(element_j.Id());
-									}
-									else
-									{
-										++iter;
+										vector<TPdBond>& bonds = family_elem.Bonds();
+										for (TPdBond& bond : bonds)
+										{
+											bond.MakeFailure();
+										}
 									}
 								}
 							});
@@ -851,9 +971,9 @@ namespace DLUT
 					double start = clock();
 					//	Set FamilyNodeCount for Initial Damage Value
 					set<int> eleIds = m_pd_meshcore.GetElementIdsByAll();
-					for (int i : eleIds)
+					for (int eid : eleIds)
 					{
-						TPdElement& element = m_pd_meshcore.Element(i);
+						TPdElement& element = m_pd_meshcore.Element(eid);
 						element.InitDamageIndex();
 					}
 
@@ -861,14 +981,7 @@ namespace DLUT
 					cout << "GenerateInitDamage():\t\t" << total_time << endl;
 				}
 			public:
-				//	Influence index
-				double				CalInfluenceIndex(double idist, double horizon)
-				{
-					return 1.0;
-					/*return 1 - (idist / horizon);*/
-					/*return pow(1 - pow( (idist / horizon), 2), 2);*/
-				}
-				double				CalModifiedVolume(const TPdElement& element_i, const TPdElement& element_j, string stype, Vector3d& center)
+				double				CalModifiedVolume(const TPdElement& element_i, const TPdElement& element_j, Vector3d& center)
 				{
 					double volume_of_j = 0;
 				
@@ -882,8 +995,6 @@ namespace DLUT
 						Ri = element_i.SideLength() * DLUT::SAE::PERIDYNAMIC::RATIO_OF_HORIZON_MESHSIZE;
 					}
 
-					if (stype == "PLANE_STRESS" ||
-						stype == "PLANE_STRAIN")
 					{
 						int partId = element_i.PartId();
 						const TPart& part = Part(partId);
@@ -911,10 +1022,23 @@ namespace DLUT
 
 					return volume_of_j;
 				}				
+				double				CalAlpha(double xi, double horizon)
+				{
+					double alpha = 1 - xi / horizon;
+					if (alpha < 0)
+					{
+						alpha = 0;
+					}
+					if (alpha > 1)
+					{
+						alpha = 1;
+					}
+					return alpha;
+				}
 			};
 
 			/************************************************************************/
-			/* �� vector< map<int, double> > ת���� ϡ�����                        */
+			/* 从 vector< map<int, double> > 转换到 稀疏矩阵                         */
 			/************************************************************************/
 			void TransVecMap2SparseMatrix(const vector< map<int, double> >& vec_map_matrix, SparseMatrix<double>& sparse_matrix)
 			{
@@ -937,7 +1061,7 @@ namespace DLUT
 				sparse_matrix.setFromTriplets(tri.begin(), tri.end());
 			}
 			/************************************************************************/
-			/* �� vector< map<int, double> > ת���� Matrix����                      */
+			/* 从 vector< map<int, double> > 转换到 Matrix矩阵                      */
 			/************************************************************************/
 			void TransVecMap2Matrix(const vector< map<int, double> >& vec_map_matrix, MatrixXd& matrix)
 			{

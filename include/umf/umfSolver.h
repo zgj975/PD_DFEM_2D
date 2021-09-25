@@ -5,7 +5,13 @@
 #include <vector>
 #include <map>
 #include "umfpack.h"
+
+#define EIGEN_USE_MKL_ALL
+#define EIGEN_VECTORIZE_SSE4_2
+
 #include "Eigen/Dense"
+#include "Eigen/SparseLU"
+#include "Eigen/Eigenvalues"
 
 using namespace Eigen;
 using namespace std;

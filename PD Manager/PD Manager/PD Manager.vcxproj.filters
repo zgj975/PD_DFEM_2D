@@ -57,7 +57,10 @@
     <ClInclude Include="peridynamic\pd_serialize_out.hxx">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="peridynamic\pd_solver_bbpd.hxx">
+    <ClInclude Include="peridynamic\pd_solver_beampd.hxx">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="peridynamic\fem_shape_functions.hxx">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

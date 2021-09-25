@@ -213,13 +213,13 @@
     <ClInclude Include="PD Manager.h" />
     <ClInclude Include="PD ManagerDlg.h" />
     <ClInclude Include="peridynamic\fem_database.hxx" />
+    <ClInclude Include="peridynamic\fem_shape_functions.hxx" />
     <ClInclude Include="peridynamic\pd_base_toolkit.hxx" />
     <ClInclude Include="peridynamic\pd_database.hxx" />
     <ClInclude Include="peridynamic\pd_product.hxx" />
     <ClInclude Include="peridynamic\pd_serialize.hxx" />
     <ClInclude Include="peridynamic\pd_serialize_in.hxx" />
     <ClInclude Include="peridynamic\pd_serialize_out.hxx" />
-    <ClInclude Include="peridynamic\pd_solver_bbpd.hxx" />
     <ClInclude Include="peridynamic\pd_solver_beampd.hxx" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="stdafx.h" />

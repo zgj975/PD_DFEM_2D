@@ -85,14 +85,14 @@ namespace DLUT
 
 					fprintf(fout, "$TIME\t = %15.10f sec\n", curtime);
 
+					fprintf(fout, "$BINDING\t = NODE\n");
+					fprintf(fout, "$COLUMN_INFO\t = ENTITY_ID\n");
+					fprintf(fout, "$RESULT_TYPE\t = Displacement(v), Rotation(v)\n");
+
 					/************************************************************************/
 					/* 按照有限元节点输出物理量                                             */
 					/************************************************************************/
-					fprintf(fout, "$BINDING\t = NODE\n");
-					fprintf(fout, "$COLUMN_INFO\t = ENTITY_ID\n");
-					fprintf(fout, "$RESULT_TYPE\t = Displacement(v)\n");
-				
-					const set<int>& femNodeIds = pdModel.PdMeshCore().GetNodeIdsByAll();
+					set<int> femNodeIds = pdModel.PdMeshCore().GetNodeIdsByAll();
 					for (int nid : femNodeIds)
 					{
 						const TPdNode& node = pdModel.PdMeshCore().Node(nid);
@@ -103,18 +103,12 @@ namespace DLUT
 						fprintf(fout, "%20.10E", node.Displacement().y());
 						fprintf(fout, "%20.10E", node.Displacement().z());
 
-						set<int> adjElems = node.AdjElementIds();
-						double damageIndex = 0;
-						for (int ei : adjElems)
-						{
-							const TPdElement& element = pdModel.PdMeshCore().Element(ei);
-							damageIndex += element.DamageIndex();
-						}
-						damageIndex /= (int)(adjElems.size());
-						fprintf(fout, "%20.10E", damageIndex);
-
+						fprintf(fout, "%20.10E", node.Displacement().rx());
+						fprintf(fout, "%20.10E", node.Displacement().ry());
+						fprintf(fout, "%20.10E", node.Displacement().rz());
+						
 						fprintf(fout, "\n");
-					}
+					}	
 
 					/************************************************************************/
 					/* 按照有限元单元输出物理量                                             */
@@ -131,107 +125,6 @@ namespace DLUT
 
 						fprintf(fout, "%20.10E", element.DamageIndex());
 
-						fprintf(fout, "\n");
-					}
-				}
-			};
-
-			class SerializeElementsInfo : public SerializeBase
-			{
-			public:
-				void		AttachFile(string filename)
-				{
-					if (m_p_PdModel->PdMeshCore().GetOutputElementIds().size() > 0)
-					{
-						SerializeBase::AttachFile(filename);
-
-						const TPdModel& pdModel = *m_p_PdModel;
-						fprintf(fout, "%10s", "Time");
-
-						const set<int>& opEleIds = pdModel.PdMeshCore().GetOutputElementIds();
-						for (int eid : opEleIds)
-						{
-							const TElementBase& ele = pdModel.PdMeshCore().Element(eid);
-
-							fprintf(fout, "Ele_%15d_DX", ele.Id()+1);
-							fprintf(fout, "Ele_%15d_DY", ele.Id()+1);
-							fprintf(fout, "Ele_%15d_DZ", ele.Id()+1);
-						}
-						fprintf(fout, "\n");
-					}
-				}
-				void		OutputElementInfo(double curtime)
-				{
-					if (fout != NULL)
-					{
-						const TPdModel& pdModel = *m_p_PdModel;
-						int width = 20;
-						int precision = width / 2;
-						const set<int>& opEleIds = pdModel.PdMeshCore().GetOutputElementIds();
-
-						fprintf(fout, "%15.10f", curtime);
-						for (int eid : opEleIds)
-						{
-							const TPdElement& element = pdModel.PdMeshCore().Element(eid);
-							TDisplacement nodeDis = pdModel.PdMeshCore().Node(element.NodeId(0)).Displacement() +
-								pdModel.PdMeshCore().Node(element.NodeId(1)).Displacement() +
-								pdModel.PdMeshCore().Node(element.NodeId(2)).Displacement() +
-								pdModel.PdMeshCore().Node(element.NodeId(3)).Displacement();
-							nodeDis /= 4;
-
-							fprintf(fout, "%20.10f", nodeDis.x());						
-							fprintf(fout, "%20.10f", element.DisplaceInElement(0, 0).x());
-
-							fprintf(fout, "%20.10f", nodeDis.y());
-							fprintf(fout, "%20.10f", element.DisplaceInElement(0, 0).y());
-
-							fprintf(fout, "%20.10f", nodeDis.z());
-							fprintf(fout, "%20.10f", element.DisplaceInElement(0, 0).z());
-						}
-						fprintf(fout, "\n");
-					}
-				}
-			};
-
-			class SerializeNodesInfo : public SerializeBase
-			{
-			public:
-				void		AttachFile(string filename)
-				{
-					if (m_p_PdModel->PdMeshCore().GetOutputNodeIds().size() > 0)
-					{
-						SerializeBase::AttachFile(filename);
-
-						fprintf(fout, "%10s\t", "Time");
-						const TPdModel& pdModel = *m_p_PdModel;
-						const set<int>& opNodeIds = pdModel.PdMeshCore().GetOutputNodeIds();
-						for (int nid : opNodeIds)
-						{
-							const TPdNode& femNode = pdModel.PdMeshCore().Node(nid);
-
-							fprintf(fout, "Node_%d_DX\t\t", femNode.IdGlobal());
-							fprintf(fout, "Node_%d_DY\t\t", femNode.IdGlobal());
-							fprintf(fout, "Node_%d_DZ\t\t", femNode.IdGlobal());
-						}
-						fprintf(fout, "\n");
-					}
-
-				}
-				void		OutputNodesInfo(double curtime)
-				{
-					if (fout != NULL)
-					{
-						fprintf(fout, "%15.10f", curtime);
-						const TPdModel& pdModel = *m_p_PdModel;
-						const set<int>& opNodeIds = pdModel.PdMeshCore().GetOutputNodeIds();
-						for (int nid : opNodeIds)
-						{
-							const TPdNode& femNode = pdModel.PdMeshCore().Node(nid);
-							
-							fprintf(fout, "%20.10E", femNode.InnerForce().x());
-							fprintf(fout, "%20.10E", femNode.InnerForce().y());
-							fprintf(fout, "%20.10E", femNode.InnerForce().z());
-						}
 						fprintf(fout, "\n");
 					}
 				}

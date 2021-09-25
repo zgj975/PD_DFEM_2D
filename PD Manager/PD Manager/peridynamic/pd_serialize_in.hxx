@@ -39,14 +39,19 @@ namespace DLUT
 			public:				
 				void		ReadLsdynaFile(string filename, TPdModel& pdModel)
 				{
-					double start = clock();
+					double start, end, cost;
+					start = clock();
 					readMeshData(filename, pdModel);
+					end = clock();
+					cost = end - start;
+					cout << "Finished to read Meah Datas, Cost time = " << cost / 1000 << endl;
 
+					start = clock();
 					readCalculateInfo(filename, pdModel);
 					readBoundaryInfo(filename, pdModel);
-
-					double total_time = (clock() - start) / 1000;
-					cout << "ReadLsdynaFile():\t\t" << total_time << endl;
+					end = clock();
+					cost = end - start;
+					cout << "Finished to read Calculation parameters and boundary conditions, Cost time = " << cost / 1000 << endl;
 				}
 				void		WriteLsdynaFile(string filename, TPdModel& pdModel)
 				{
@@ -207,7 +212,7 @@ namespace DLUT
 									int dof = ParseString<int>(line.substr(10 + 10 * i, 10));
 									if (dof == 1)
 									{
-										pdModel.AddBounarySpcNode(TBoundarySpcNode(nid_local, i));
+										pdModel.PdMeshCore().Node(nid_local).BoundarySpcNode().push_back(TBoundarySpcNode(i));
 									}
 								}
 								
@@ -231,42 +236,14 @@ namespace DLUT
 								int nid = ParseString<int>(line.substr(0, 10));
 								int nid_local = map_fem_nid_global_to_fem_nid_local[nid];
 
-								TBoundaryPrescribedMotion bpm(nid_local);
+								TBoundaryPrescribedMotion bpm;
 								bpm.Dof() = ParseString<int>(line.substr(10, 10));
 								bpm.Vda() = ParseString<int>(line.substr(20, 10));
 								bpm.Lcid() = ParseString<int>(line.substr(30, 10));
 								bpm.Sf() = ParseString<double>(line.substr(40, 10));
 								bpm.MotionType() = "NODE";
 
-								pdModel.AddBoundaryPreMotionNode(bpm);
-
-								pos = fin.tellg();
-							}
-
-							continue;
-						}
-						else if (string("*BOUNDARY_PRESCRIBED_MOTION_RIGID") == line)
-						{
-							streampos pos = fin.tellg();
-
-							while (getline(fin, line))
-							{
-								if (line.substr(0, 1) == string("*") ||
-									line.substr(0, 1) == string("$"))
-								{
-									fin.seekg(pos);
-									break;
-								}
-
-								int pid = ParseString<int>(line.substr(0, 10));
-								TBoundaryPrescribedMotion bpm(pid);
-								bpm.Dof() = ParseString<int>(line.substr(10, 10));
-								bpm.Vda() = ParseString<int>(line.substr(20, 10));
-								bpm.Lcid() = ParseString<int>(line.substr(30, 10));
-								bpm.Sf() = ParseString<double>(line.substr(40, 10));
-								bpm.MotionType() = "RIGID";
-
-								pdModel.AddBoundaryPreMotionNode(bpm);
+								pdModel.PdMeshCore().Node(nid_local).BoundaryPreMotion().push_back(bpm);
 
 								pos = fin.tellg();
 							}
@@ -287,16 +264,22 @@ namespace DLUT
 								int nid = ParseString<int>(line.substr(0, 10));
 								int nid_local = map_fem_nid_global_to_fem_nid_local[nid];
 								int dof = ParseString<int>(line.substr(10, 10));
+								/************************************************************************/
+								/* 5 6 7 分别代表X Y Z的弯矩                                  */
+								/************************************************************************/
+								if (dof > 4)
+								{
+									dof -= 1;
+								}
 								int lcid = ParseString<int>(line.substr(20, 10));
 								double sf = ParseString<double>(line.substr(30, 10));
 
 								TLoadNodePoint loadnodepoint;
-								loadnodepoint.Id() = nid_local;
 								loadnodepoint.Dof() = dof;
 								loadnodepoint.Lcid() = lcid;
 								loadnodepoint.Sf() = sf;
 
-								pdModel.AddLoadNodePoint(loadnodepoint);
+								pdModel.PdMeshCore().Node(nid_local).LoadNodePoint().push_back(loadnodepoint);
 
 								pos = fin.tellg();
 							}
@@ -408,7 +391,15 @@ namespace DLUT
 						}
 						else if (string("*PART") == line)
 						{
-							getline(fin, line);
+							streampos pos = fin.tellg();
+							while (getline(fin, line))
+							{
+								if (line.substr(0, 1) == string("*") ||
+									line.substr(0, 1) == string("$"))
+								{
+									fin.seekg(pos);
+									break;
+								}
 							string partname = line;		//	PART_NAME
 							getline(fin, line);
 							int partid = ParseString<int>(line.substr(0, 10));
@@ -419,6 +410,7 @@ namespace DLUT
 							part.MaterialId() = matid;
 							part.SectionId() = propid;
 							pdModel.AddPart(part);
+							}
 
 							continue;
 						}
@@ -439,16 +431,6 @@ namespace DLUT
 								sec.Type() = string("PLANE_STRESS");
 							}
 							sec.InsertSectionData("THICKNESS", THICKNESS);
-							pdModel.AddSection(sec);
-
-							continue;
-						}
-						else if (string("*SECTION_SOLID") == line)
-						{
-							getline(fin, line);
-							int pid = ParseString<int>(line.substr(0, 10));		//	SECTION_ID
-							TSection sec(pid);
-							sec.Type() = string("SOLID");
 							pdModel.AddSection(sec);
 
 							continue;
@@ -532,69 +514,8 @@ namespace DLUT
 
 										if (setName == "PD")
 										{
-											pdModel.PdMeshCore().Element(eid_local).AnalysisElementType() = PD_ELEMENT;											
+											pdModel.PdMeshCore().Element(eid_local).Alpha() = 1.0;
 										} 
-										else if (setName == "NON-FRACTURE")
-										{
-											pdModel.PdMeshCore().Element(eid_local).CalParas().b_facture = false;
-										}
-									}
-								}
-
-								pos = fin.tellg();
-							}
-
-							continue;
-						}
-						else if (string("*DATABASE_HISTORY_SHELL") == line ||
-								string("*DATABASE_HISTORY_SOLID") == line)
-						{
-							streampos pos = fin.tellg();
-							while (getline(fin, line))
-							{
-								if (line.substr(0, 1) == string("*") ||
-									line.substr(0, 1) == string("$"))
-								{
-									fin.seekg(pos);
-									break;
-								}
-
-								int num = (int)(line.length()) / 10;
-								for (int i = 0; i < num; ++i)
-								{
-									int eid = ParseString<int>(line.substr(0 + 10 * i, 10));
-									if (eid != 0)
-									{
-										int eid_local = map_fem_eid_global_to_fem_eid_local[eid];
-										pdModel.PdMeshCore().AddOutputElement(eid_local);
-									}
-								}
-
-								pos = fin.tellg();
-							}
-
-							continue;
-						}
-						else if (string("*DATABASE_HISTORY_NODE") == line)
-						{
-							streampos pos = fin.tellg();
-							while (getline(fin, line))
-							{
-								if (line.substr(0, 1) == string("*") ||
-									line.substr(0, 1) == string("$"))
-								{
-									fin.seekg(pos);
-									break;
-								}
-
-								int num = (int)(line.length()) / 10;
-								for (int i = 0; i < num; ++i)
-								{
-									int nid = ParseString<int>(line.substr(0 + 10 * i, 10));
-									if (nid != 0)
-									{
-										int nid_local = map_fem_nid_global_to_fem_nid_local[nid];
-										pdModel.PdMeshCore().AddOutputNode(nid_local);
 									}
 								}
 

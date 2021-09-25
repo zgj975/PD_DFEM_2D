@@ -19,161 +19,248 @@ namespace DLUT
 				void				Attach(TPdModel& model)
 				{
 					m_pPdModel = &model;
-
-					initializeMatParas();
+	
+					initializeMatParasPD();
 				}
 				/************************************************************************/
 				/* 隐式求解 F=Kd 平衡方程                                               */
 				/************************************************************************/
-				void				ImplicitSolve(int current_step, int total_step, int delta_step)
+				bool				ImplicitSolve(int current_step, int total_step, int& ITERATOR_NUMS, int delta_step = 1)
 				{
 					TPdModel& pdModel = *m_pPdModel;
 
-					/************************************************************************/
-					/* 生成总刚矩阵                                                         */
-					/************************************************************************/
-					double start = clock();					
-					genGlobalStiffnessPD();
-					cout << "genGlobalStiffnessPD():\t\t" << (clock() - start) / 1000. << endl;
+					ITERATOR_NUMS = 0;
+					bool CONVERGENCED = FALSE;
+
+					const set<int>& eids = pdModel.PdMeshCore().GetElementIdsByAll();
+					const set<int>& nids = pdModel.PdMeshCore().GetNodeIdsByAll();
+					const int nCount = (int)(nids.size());
 
 					/************************************************************************/
-					/* 生成力向量                                                           */
+					/* 节点信息初始化												         */
 					/************************************************************************/
-					start = clock();
-					int nCount = pdModel.PdMeshCore().NodeCount();
-			
-					int dim = DOF;
-					vector<double> FORCE;	//	Force vector
-					FORCE.clear();
-					FORCE.resize(dim * nCount, 0);
+					parallel_for_each(nids.begin(), nids.end(), [&](int nid)
+						{
+							TPdNode& node = pdModel.PdMeshCore().Node(nid);
+							node.IteratorDisplacement().setZero();
+							node.IncrementalDisplacement().setZero();
+						});
+					/************************************************************************/
+					/* 非连续伽辽金单元内部积分点处的信息初始化                             */
+					/************************************************************************/
+					parallel_for_each(eids.begin(), eids.end(), [&](int eid)
+						{
+							TPdElement& element = pdModel.PdMeshCore().Element(eid);
+							for (int is = 0; is < IP_COUNT_2D; ++is)
+							{
+								element.IP(is).IteratorDisplacement().setZero();
+								element.IP(is).IncrementalDisplacement().setZero();
+							}
+						});
+					/************************************************************************/
+					/* P                                                           */
+					/************************************************************************/
+					vector<double> P;
+					P.clear();
+					P.resize(DOF * nCount, 0);
 
-					for (const TLoadNodePoint& lp : pdModel.LoadNodePoints())
+					for (int nid : nids)
+					{
+						const TPdNode& node = pdModel.PdMeshCore().Node(nid);
+						const vector<TLoadNodePoint>& LPs = node.LoadNodePoint();
+						for (const TLoadNodePoint& lp : LPs)
+						{
+							double value = 0;
+							int curid = lp.Lcid();
+
+							if (pdModel.CurveExist(curid))
+							{
+								TCurve& curve = pdModel.Curve(curid);
+								value = (curve.GetValueByX(current_step) - curve.GetValueByX(0)) * lp.Sf();
+							}
+							else
+							{
+								double cur_index = (double)(current_step) / (double)(total_step);
+								value = lp.Sf() * cur_index;
+							}
+
+							int row = DOF * nid + (lp.Dof() - 1);
+							P[row] = value;
+						}
+					}
+					/************************************************************************/
+					/* 迭代求解                                          */
+					/************************************************************************/
+					while (ITERATOR_NUMS < MAX_INTERATOR_NUMS && !CONVERGENCED)
 					{
 						/************************************************************************/
-						/* 静力加载的只有总力，因此将力的增量平均分布到每个增量步中             */
+						/* R                                          */
 						/************************************************************************/
-						double incr_index = (double)(delta_step) / (double)(total_step);
-
-						int nid = lp.Id();
-
-						double value = 0;
-						int curid = lp.Lcid();
-
-						if (pdModel.CurveExist(curid))
+						vector<double> R;
+						R.clear();
+						R.resize(DOF * nCount, 0);
+						for (int ni : nids)
 						{
-							TCurve& curve = pdModel.Curve(curid);
-							value = (curve.GetValueByX(current_step) - curve.GetValueByX(current_step - delta_step)) * lp.Sf();
+							TPdNode& node = pdModel.PdMeshCore().Node(ni);
+							for (int loop_dim = 0; loop_dim < DOF; ++loop_dim)
+							{
+								R[ni * DOF + loop_dim] = node.InnerForce()[loop_dim];
+							}
+						}
+						/************************************************************************/
+						/* F=P-R                                          */
+						/************************************************************************/
+						vector<double> FORCE;
+						FORCE.clear();
+						FORCE.resize(DOF * nCount, 0);
+						for (int loop = 0; loop < DOF * nCount; ++loop)
+						{
+							FORCE[loop] = P[loop] - R[loop];
+						}
+						/************************************************************************/
+						/* 生成总刚矩阵                                                         */
+						/************************************************************************/
+						m_GK.clear();
+						m_GK.resize(DOF * nCount);
+						genGlobalStiffnessFEM();
+						genGlobalStiffnessPD();
+
+						/************************************************************************/
+						/* 施加约束条件                                                         */
+						/************************************************************************/
+						for (int nid : nids)
+						{
+							const TPdNode& node = pdModel.PdMeshCore().Node(nid);
+							const vector<TBoundarySpcNode>& BSNs = node.BoundarySpcNode();
+							for (const TBoundarySpcNode& tbsn : BSNs)
+							{
+								int curSeri = DOF * nid + (tbsn.Dof() - 1);
+
+								for (const pair<int, double>& j_v : m_GK[curSeri])
+								{
+									if (j_v.first != curSeri)
+									{
+										m_GK[j_v.first].erase(curSeri);
+									}
+								}
+
+								m_GK[curSeri].clear();
+								m_GK[curSeri][curSeri] = 1;
+
+								FORCE[curSeri] = 0;
+							}
+						}
+						/************************************************************************/
+						/* 施加强制位移                                                         */
+						/************************************************************************/
+						for (int nid : nids)
+						{
+							const TPdNode& node = pdModel.PdMeshCore().Node(nid);
+							const vector<TBoundaryPrescribedMotion>& BPMs = node.BoundaryPreMotion();
+							for (const TBoundaryPrescribedMotion& bpm : BPMs)
+							{
+								int curid = bpm.Lcid();
+								TCurve& curve = pdModel.Curve(curid);
+								// 只对位移边界条件进行处理
+								if (bpm.Vda() == 2)
+								{
+									if (ITERATOR_NUMS == 0)
+									{
+										//	按照曲线进行增量位移的计算
+										double b_current = curve.GetValueByX((double)current_step / (double)total_step) * bpm.Sf();
+										double b_last = curve.GetValueByX((double)(current_step - delta_step) / (double)(total_step)) * bpm.Sf();
+										double b = b_current - b_last;
+
+										int k = DOF * nid + (bpm.Dof() - 1);
+										double Krr = m_GK[k][k];
+										m_GK[k][k] = Krr * 10E10;
+
+										FORCE[k] = Krr * b * 10E10;
+									}
+									else
+									{
+										int curSeri = DOF * nid + (bpm.Dof() - 1);
+
+										for (const pair<int, double>& j_v : m_GK[curSeri])
+										{
+											if (j_v.first != curSeri)
+											{
+												m_GK[j_v.first].erase(curSeri);
+											}
+										}
+
+										m_GK[curSeri].clear();
+										m_GK[curSeri][curSeri] = 1;
+
+										FORCE[curSeri] = 0;
+									}
+								}
+							}
+						}
+
+						/************************************************************************/
+						/* 求解线性方程组
+						*/
+						/************************************************************************/
+						SparseMatrix<double> sparse_matrix_GK;
+						TransVecMap2SparseMatrix(m_GK, sparse_matrix_GK);
+
+						vector<double> DISPLACEMENT;
+						DISPLACEMENT.clear();
+						DISPLACEMENT.resize(DOF * nCount, 0);
+
+						umf_solver(sparse_matrix_GK, DISPLACEMENT, FORCE);
+						/************************************************************************/
+						/* 更新位移增量结果							                            */
+						/************************************************************************/
+						for (int nid : nids)
+						{
+							TPdNode& node = pdModel.PdMeshCore().Node(nid);
+							for (int loop_dim = 0; loop_dim < DOF; ++loop_dim)
+							{
+								node.IteratorDisplacement()[loop_dim] = DISPLACEMENT[DOF * nid + loop_dim];
+								node.IncrementalDisplacement()[loop_dim] += DISPLACEMENT[DOF * nid + loop_dim];
+							}
+						}
+
+						/************************************************************************/
+						/* 根据位移结果进行判定是否已经收敛                                     */
+						/************************************************************************/
+					//	CONVERGENCED = isConvergenced();
+						CONVERGENCED = true;
+						if (CONVERGENCED)
+						{
+							/************************************************************************/
+							/* 迭代收敛之后，更新节点坐标和位移信息，并跳出迭代循环                 */
+							/************************************************************************/
+							updateInfoAfterConvergenceFEM();
+							updateInfoAfterConvergencePD();
+
+							//		RefreshFracture(); 
+
+							break;
 						}
 						else
 						{
-							value = lp.Sf() * incr_index;
-						}
+							/************************************************************************/
+							/* 迭代不收敛，只更新应变/应力/单元&节点内力，并进行下一次迭代          */
+							/************************************************************************/
+							updateStrainStressFEM();
+							updateStrainStressPD();
 
-						int row = dim * nid + (lp.Dof() - 1);
-						FORCE[row] = value;
-					}
-
-					/************************************************************************/
-					/* 施加约束条件                                                         */
-					/************************************************************************/
-					for (const TBoundarySpcNode& tbsn : pdModel.BoundarySpcNodes())
-					{
-						int nid = tbsn.Id();
-						
-						int curSeri = dim * nid + (tbsn.Dof() - 1);
-
-						for (const pair<int, double>& j_v : m_GK[curSeri])
-						{
-							if (j_v.first != curSeri)
-							{
-								m_GK[j_v.first].erase(curSeri);
-							}
-						}
-
-						m_GK[curSeri].clear();
-						m_GK[curSeri][curSeri] = 1;
-
-						FORCE[curSeri] = 0;
-					}
-
-					/************************************************************************/
-					/* 施加强制位移                                                         */
-					/************************************************************************/
-					for (const TBoundaryPrescribedMotion& bpm : pdModel.BoundaryPrescribedMotions())
-					{
-						string type = bpm.MotionType();
-						set<int>	nids;
-						nids.clear();
-						if (type == "RIGID")
-						{
-							int partId = bpm.Id();
-							TPart& part = pdModel.Part(partId);
-							nids = part.GetElementIds();
-						}
-						else if (type == "NODE")
-						{
-							nids.insert(bpm.Id());
-						}
-						for (int nid : nids)
-						{
-							int curid = bpm.Lcid();
-							TCurve& curve = pdModel.Curve(curid);
-							// 只对位移边界条件进行处理
-							if (bpm.Vda() == 2)
-							{
-								//	按照曲线进行增量位移的计算
-								double b_current = curve.GetValueByX((double)current_step / (double)total_step) * bpm.Sf();
-								double b_last = curve.GetValueByX((double)(current_step - delta_step) / (double)(total_step)) * bpm.Sf();
-								double b = b_current - b_last;
-
-								if (bpm.Dof() == 3 || bpm.Dof() == 4 || bpm.Dof() == 5 || bpm.Dof() == 6)
+							parallel_for_each(nids.begin(), nids.end(), [&](int nid)
 								{
-									continue;
-								}
-
-								int k = dim * nid + (bpm.Dof() - 1);
-								double Krr = m_GK[k][k];
-								m_GK[k][k] = Krr * 10E10;
-
-								FORCE[k] = Krr * b * 10E10;
-							}
+									TPdNode& node = pdModel.PdMeshCore().Node(nid);
+									node.InnerForce().setZero();
+								});
+							updateInnerForceFEM();
+							updateInnerForcePD();
 						}
+
+						ITERATOR_NUMS++;
 					}
 
-					cout << "Boundary Conditions:\t\t" << (clock() - start) / 1000. << endl;
-					start = clock();
-					
-					/************************************************************************/
-					/* 求解线性方程组						                                */
-					/************************************************************************/
-					SparseMatrix<double> sparse_matrix_GK;
-					TransVecMap2SparseMatrix(m_GK, sparse_matrix_GK);
-					
-					cout << "TransVecMap2SparseMatrix():\t" << (clock() - start) / 1000. << endl;
-					start = clock();
-
-					vector<double> DISPLACEMENT;
-					DISPLACEMENT.clear();
-					DISPLACEMENT.resize(dim * nCount, 0);
-		//			cout << sparse_matrix_GK << endl;
-					umf_solver(sparse_matrix_GK, DISPLACEMENT, FORCE);
-					/************************************************************************/
-					/* 更新位移结果							                                */
-					/************************************************************************/
-					start = clock();
-					for (int nid = 0; nid < nCount; ++nid)
-					{
-						TPdNode& node = pdModel.PdMeshCore().Node(nid);
-
-						node.Displacement().x() += DISPLACEMENT[dim * nid];
-						node.Displacement().y() += DISPLACEMENT[dim * nid + 1];
-						node.Displacement().z() += DISPLACEMENT[dim * nid + 2];
-						node.Displacement().rx() += DISPLACEMENT[dim * nid + 3];
-						node.Displacement().ry() += DISPLACEMENT[dim * nid + 4];
-						node.Displacement().rz() += DISPLACEMENT[dim * nid + 5];
-					}
-	
-					cout << "umf_solver:\t\t\t" << (clock() - start) / 1000. << endl;
+					return CONVERGENCED;
 				}
 				/************************************************************************/
 				/* 显式求解 中心差分法                                                  */
@@ -183,32 +270,11 @@ namespace DLUT
 					TPdModel& pdModel = *m_pPdModel;
 					calPdForces();
 
-					for (const TPart& part : pdModel.Parts())
-					{
-						const TMaterial& material = pdModel.Material(part.MaterialId());
-						if (material.Name() == "MAT_RIGID")
-							continue;
-
-						const TSection& section = pdModel.Section(part.SectionId());
-						double Rho = material.GetMatValue("Rho");
-						double thickness = section.GetSectionValue("THICKNESS");
-
-						const set<int>& eleIds = part.GetElementIds();
-						set<int> nodeIds;
-						nodeIds.clear();
-						for (int eid : eleIds)
-						{
-							const TPdElement& element = pdModel.PdMeshCore().Element(eid);
-							for (int nid : element.NodeIds())
-							{
-								nodeIds.insert(nid);
-							}
-						}
-
-						parallel_for_each(nodeIds.begin(), nodeIds.end(), [&](int nid)
+					const set<int>& nodeIds = pdModel.PdMeshCore().GetNodeIdsByAll();
+					parallel_for_each(nodeIds.begin(), nodeIds.end(), [&](int nid)
 						{
 							TPdNode& node = pdModel.PdMeshCore().Node(nid);
-							
+
 							int nodePos = node.Id() * DOF;
 							node.Acceleration().x() = (node.OuterForce().x() - node.InnerForce().x()) / m_GM[nodePos][nodePos];
 							node.Acceleration().y() = (node.OuterForce().y() - node.InnerForce().y()) / m_GM[nodePos + 1][nodePos + 1];
@@ -218,9 +284,9 @@ namespace DLUT
 							node.Acceleration().rz() = (node.OuterForce().rz() - node.InnerForce().rz()) / m_GM[nodePos + 5][nodePos + 5];
 
 							node.Velocity() = node.Velocity() + node.Acceleration() * time_interval;
-							node.Displacement() = node.Displacement() + node.Velocity() * time_interval;
+							node.IteratorDisplacement() = node.Velocity() * time_interval;
+							node.Displacement() = node.Displacement() + node.IteratorDisplacement();
 						});
-					}
 				}
 				/************************************************************************/
 				/* 更新断裂失效的Bond信息                                               */
@@ -228,135 +294,58 @@ namespace DLUT
 				void				RefreshFracture()
 				{
 					TPdModel& pdModel = *m_pPdModel;
-					for (const TPart& part : pdModel.Parts())
-					{
-						const TMaterial& material = pdModel.Material(part.MaterialId());
-						double E = material.GetMatValue("E");
-						const set<int> eids = part.GetElementIds();
-	
-						double s[2], t[2];
-						s[0] = t[0] = 1.0 / sqrt(3.0);
-						s[1] = t[1] = -s[0];
-
-						parallel_for_each(eids.begin(), eids.end(), [&](int ei)
+					
+					updateStrainStressPD();
+					const set<int>& eids = pdModel.PdMeshCore().GetElementIdsByAll();
+					parallel_for_each(eids.begin(), eids.end(), [&](int ei)
 						{
 							TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
-							bool updateSK = false;
-
-							const double cax = element_i.CalParas().cax;
-							const double cby = element_i.CalParas().cby;
-							const double cbz = element_i.CalParas().cbz;
-							const double ctor = element_i.CalParas().ctor;
-							const double wc = element_i.CalParas().wc;
-
-							if (element_i.CalParas().b_facture)
+							if (element_i.AnalysisElementType() == PD_ELEMENT)
 							{
-								map<int, TPdBond>& familyBonds = element_i.FamilyElementBonds();
-								for (map<int, TPdBond>::iterator iter = familyBonds.begin();
-									iter != familyBonds.end();)
+								const double& sed_criterion = element_i.CalParas().sed_criterion;
+								const Eigen::Matrix4d& D_PD = element_i.CalParas().D_PD;
+								VEC_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+								for (TPdFamilyElement& family_elem : familyElements)
 								{
-									int ej = (*iter).first;
+									int ej = family_elem.Id();
 									TPdElement& element_j = pdModel.PdMeshCore().Element(ej);
-									double vj = element_j.Area() * element_j.Thickness();
-									if (element_j.CalParas().b_facture && (element_i.Id() != element_j.Id()))
+									//	单元本身不进行断裂判断
+									if (element_i.Id() == element_j.Id())
 									{
-										const TCoordinate& Xi = element_i.CoordinateInElement(0, 0);
-										const TDisplacement& Di = element_i.DisplaceInElement(0, 0);
-
-										const TCoordinate& Xj = element_j.CoordinateInElement(0, 0);
-										const TDisplacement& Dj = element_j.DisplaceInElement(0, 0);
-
-										Eigen::Vector3d vec_ij = Xj - Xi;
-										Eigen::MatrixXd Tb = T_b(vec_ij);
-
-										double L = Module<TCoordinate>(Xj - Xi);
-										MatrixXd k = SK_LOCAL(cax, cby, cbz, ctor, L);
-
-										VectorXd disp;
-										disp.resize(12);
-										disp.setZero();
-										disp.block(0, 0, 6, 1) = Di;
-										disp.block(6, 0, 6, 1) = Dj;
-
-										double w_bond = 0.5 * disp.transpose() * Tb.transpose() * k * Tb * disp;
-
-										/*double idist = Distance_2pt<Vector3d>(Xi, Xj);
-										double nlength = Distance_2pt<Vector3d>(Xi + Di.block(0, 0, 3, 1), Xj + Dj.block(0, 0, 3, 1));
-										double s = abs((nlength - idist) / idist);*/
-										if (w_bond > wc)
-										{
-											++iter;
-											element_i.DeleteFamilyElement(element_j.Id());
-				
-											updateSK = true;
-										}
-										else
-										{
-											++iter;
-										}
-									/*	vector<double> countForS;
-										countForS.clear();
-										for (int is = 0; is < 2; ++is)
-										{
-											for (int it = 0; it < 2; ++it)
-											{
-												const TCoordinate& Xi = element_i.CoordinateInElement(s[is], t[it]);
-												const TDisplacement& Di = element_i.DisplaceInElement(s[is], t[it]);
-
-												for (int js = 0; js < 2; ++js)
-												{
-													for (int jt = 0; jt < 2; ++jt)
-													{
-														const TCoordinate& Xj = element_j.CoordinateInElement(s[js], t[jt]);
-														const TDisplacement& Dj = element_j.DisplaceInElement(s[js], t[jt]);
-
-														double idist = Distance_2pt<Vector3d>(Xi, Xj);
-														double nlength = Distance_2pt<Vector3d>(Xi + Di.block(0, 0, 3, 1), Xj + Dj.block(0, 0, 3, 1));
-														double s = abs((nlength - idist) / idist);
-														if (s > s0)
-														{
-															countForS.push_back(s);
-														}
-													}
-												}
-											}
-										}
-
-										if (countForS.size() >= 16)
-										{
-											++iter;
-											element_i.DeleteFamilyElement(element_j.Id());
-											updateSK = true;
-										}
-										else
-										{
-											++iter;
-										}*/
+										continue;
 									}
-									else
+
+									bool needUpdateSK = false;
+							
+									vector<TPdBond>& bonds = family_elem.Bonds();
+									int nCountBondFractured = 0;
+									for (TPdBond& bond : bonds)
 									{
-										++iter;
+										if (bond.IsValid() && (bond.MicroPotential() > sed_criterion))
+										{
+											bond.MakeFailure();
+											needUpdateSK = true;
+										}
 									}
-								}
-								/************************************************************************/
-								/* 重新对单元i进行单刚的生成                                           */
-								/************************************************************************/
-								if (updateSK)
-								{
-									genSingleStiffnessPD(element_i);
+									//	如果有familyElement的bond发生了失效，则需要更新对应的SK
+									if (needUpdateSK)
+									{
+										genSingleStiffnessPD_Element(ei, family_elem);
+									}
 								}
 							}
-						});
-					}
+						}); 
 				}
 			private:
 				/************************************************************************/
-				/* 初始化PD点所需的计算参数                                             */
+				/* Begin of PD															*/
 				/************************************************************************/
-				void				initializeMatParas()
+				void				initializeMatParasPD()
 				{
 					TPdModel& pdModel = *m_pPdModel;
 						
+					double start = clock();
+
 					for (const TPart& part : pdModel.Parts())
 					{
 						const TMaterial& material = pdModel.Material(part.MaterialId());
@@ -382,186 +371,360 @@ namespace DLUT
 						const set<int> eids = part.GetElementIds();
 						parallel_for_each(eids.begin(), eids.end(), [&](int ei) {
 							TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
-
-							double horizon = element_i.Horizon();
-						
-							double& cax = element_i.CalParas().cax;
-							double& cby = element_i.CalParas().cby;
-							double& cbz = element_i.CalParas().cbz;
-							double& ctor = element_i.CalParas().ctor;
-							double& wc = element_i.CalParas().wc;
-
-							double ri = element_i.Radius();
-							double D0 = E * pow(t, 3) / (12.0 * (1 - pow(PR, 2)));
-
-							cax = 6 * E / (PI * pow(horizon, 3) * (1 - PR) * t);
-							cbz = E * (1 - 3 * PR) / (6 * PI * horizon * (1 - pow(PR, 2)) * t);
-							cby = 6 * D0 * (1 + PR) / (PI * pow(horizon, 3) * pow(t, 2));
-							ctor = 6 * D0 * (1 - 3 * PR) / (PI * pow(horizon, 3) * pow(t, 2));
-
-							wc = (3 * Gc) / (2 * t * pow(horizon, 3));
-						});
-						/************************************************************************/
-						/* 计算所有Bond的单刚矩阵                                               */
-						/************************************************************************/
-						double start = clock();
-						parallel_for_each(eids.begin(), eids.end(), [&](int ei)
+											
+							double horizon = 0.0;
+							if (DLUT::SAE::PERIDYNAMIC::USE_CONSTANT_HORIZON)
 							{
-								TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
-								genSingleStiffnessPD(element_i);
-							});
-						double total_time = (clock() - start) / 1000;
-						cout << "genSingleStiffnessPD():\t\t" << total_time << endl;
-
-						/************************************************************************/
-						/* 计算所有单元的质量矩阵                                  */
-						/************************************************************************/
-						start = clock();
-						genGlobalMassPD();
-						total_time = (clock() - start) / 1000;
-						cout << "genGlobalMassPD():\t\t" << total_time << endl;
-					}
-				}	
-				/************************************************************************/
-				/* 生成总刚矩阵		   		                                            */
-				/************************************************************************/
-				void				genGlobalStiffnessPD()
-				{
-					TPdModel& pdModel = *m_pPdModel;
-
-					int nCount = pdModel.PdMeshCore().NodeCount();
-					int dim = DOF;
-					m_GK.clear();
-					m_GK.resize(dim * nCount);
-
-					for (const TPart& part : pdModel.Parts())
-					{
-						const set<int> eids = part.GetElementIds();
-						const TSection& section = pdModel.Section(part.SectionId());
-						string stype = section.Type();
-							
-						/************************************************************************/
-						/* 组装总刚矩阵                                                         */
-						/************************************************************************/
-						for (int ei : eids)
-						{
-							const TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
-							//	将单元I和单元J对应的节点放入一个nids，长度为8
-							const vector<int>& nids_i = element_i.NodeIds();
-
-							const map<int, TPdBond>& familyBonds = element_i.FamilyElementBonds();
-							for (const pair<int, TPdBond>& bondInfo : familyBonds)
-							{
-								int ej = bondInfo.first;
-								const TPdElement& element_j = pdModel.PdMeshCore().Element(ej);
-								const vector<int>& nids_j = element_j.NodeIds();
-
-								vector<int> nids(nids_i);								
-								for (int nj : nids_j)
-								{
-									nids.push_back(nj);
-								}
-
-								const SingleStiffness& SK = bondInfo.second.SK();
-								int LenOfSK = 48;
-							
-								for (int row = 0; row < LenOfSK; ++row)
-								{
-									for (int col = 0; col < LenOfSK; ++col)
-									{
-										int Row = nids[row / dim] * dim + row % dim;
-										int Col = nids[col / dim] * dim + col % dim;
-										m_GK[Row][Col] += SK(row, col);
-									}
-								}
+								horizon = DLUT::SAE::PERIDYNAMIC::HORIZON;
 							}
-						}
+							else
+							{
+								horizon = element_i.SideLength() * DLUT::SAE::PERIDYNAMIC::RATIO_OF_HORIZON_MESHSIZE;
+							}
+							Eigen::Matrix4d& D_PD = element_i.CalParas().D_PD;
+							double& sed_criterion = element_i.CalParas().sed_criterion;
+
+							double D0 = E * pow(t, 3) / (12.0 * (1 - pow(PR, 2)));
+							D_PD(0, 0) = 6 * E / (PI * pow(horizon, 3) * (1 - PR) * t);
+							D_PD(1, 1) = E * (1 - 3 * PR) / (6 * PI * horizon * (1 - pow(PR, 2)) * t);
+							D_PD(2, 2) = 6 * D0 * (1 + PR) / (PI * pow(horizon, 3) * pow(t, 2));
+							D_PD(3, 3) = 6 * D0 * (1 - 3 * PR) / (PI * pow(horizon, 3) * pow(t, 2));
+
+							sed_criterion = (3 * Gc) / (2 * t * pow(horizon, 3));
+						});	
 					}
+
+					genSingleStiffnessPD();
+					genGlobalMassPD();
+					
+					double total_time = (clock() - start) / 1000;
+					cout << "initializeMatParasPD():\t\t" << total_time << endl;
+				}	
+				void				genSingleStiffnessPD()
+				{
+					double start = clock();
+					TPdModel& pdModel = *m_pPdModel;
+					set<int> eids = pdModel.PdMeshCore().GetElementIdsByAll();
+					parallel_for_each(eids.begin(), eids.end(), [&](int ei)
+						{
+							TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
+							VEC_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+							for (TPdFamilyElement& family_elem : familyElements)
+							{
+								genSingleStiffnessPD_Element(ei, family_elem);
+							}
+						});
+
+					double total_time = (clock() - start) / 1000;
+					cout << "genSingleStiffnessPD(): \t" << total_time << endl;
 				}
-				/************************************************************************/
-				/* 生成单元I与单元J之间的单刚矩阵                                       */
-				/************************************************************************/
-				void				genSingleStiffnessPD(TPdElement& element_i)
+				void				genSingleStiffnessPD_Element(int ei, TPdFamilyElement& family_elem)
 				{
 					TPdModel& pdModel = *m_pPdModel;
-					TPart& part = pdModel.Part(element_i.PartId());
-					TSection& section = pdModel.Section(part.SectionId());
-					double PR = pdModel.Material(part.MaterialId()).GetMatValue("PR");
-				
-					const double cax = element_i.CalParas().cax;
-					const double cby = element_i.CalParas().cby;
-					const double cbz = element_i.CalParas().cbz;
-					const double ctor = element_i.CalParas().ctor;
+					TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
+					Eigen::Matrix4d& D_PD = element_i.CalParas().D_PD;
 
-					map<int, TPdBond>& familyBonds = element_i.FamilyElementBonds();
-					for (map<int, TPdBond>::iterator iter = familyBonds.begin();
-						iter != familyBonds.end(); ++iter)
+					double ia = 0.5 * Distance_2pt<Vector3d>(element_i.Node(0).Coordinate(), element_i.Node(1).Coordinate());
+					double ib = 0.5 * Distance_2pt<Vector3d>(element_i.Node(1).Coordinate(), element_i.Node(2).Coordinate());
+					double thickness_i = element_i.Thickness();
+
+					VEC_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+					for (TPdFamilyElement& family_elem : familyElements)
 					{
-						int nj = (*iter).first;
-						TPdBond& bond_ij = (*iter).second;
-						const TPdElement& element_j = pdModel.PdMeshCore().Element(nj);
+						int ej = family_elem.Id();
+						const TPdElement& element_j = pdModel.PdMeshCore().Element(ej);
+						double thickness_j = element_j.Thickness();
 
-						SingleStiffness& SK = bond_ij.SK();
-						SK.resize(48, 48);
+						SingleStiffness& SK = family_elem.SK();
 						SK.setZero();
 
-						double volume_scale = bond_ij.Volume() / (element_j.Area() * element_j.Thickness());
-
-						double s[2], t[2];
-						s[0] = t[0] = 1.0 / sqrt(3.0);
-						s[1] = t[1] = -s[0];
-
+						double volume_scale = family_elem.VolumeIndex();
 						MatrixXd Te = T_elem(element_i, element_j);
 						MatrixXd TE = T_ELEM(element_i, element_j);
 
-						for (int is = 0; is < 2; ++is)
+						//	计算每一根bond的单刚
+						const vector<TPdBond>& bonds = family_elem.Bonds();
+						for (const TPdBond& bond : bonds)
 						{
-							for (int it = 0; it < 2; ++it)
+							if (bond.IsValid())
 							{
-								TCoordinate Xi = element_i.CoordinateInElement(s[is], t[it]);
-								double thickness_i = element_i.Thickness();
-								double Ji = element_i.Jacobi(s[is], t[it]);
-								double ia = 0.5 * Distance_2pt<Vector3d>(element_i.Node(0).CoordinateCurrent(), element_i.Node(1).CoordinateCurrent());
-								double ib = 0.5 * Distance_2pt<Vector3d>(element_i.Node(1).CoordinateCurrent(), element_i.Node(2).CoordinateCurrent());;
+								const TBondPoint& Xi = bond.Xi();
+								const TBondPoint& Xj = bond.Xj();
+								double L = bond.BondLength();
 
-								for (int js = 0; js < 2; ++js)
+								double Ji = element_i.Jacobi(S_IP_2D[Xi.Index()], T_IP_2D[Xi.Index()]);
+								double ia = 0.5 * Distance_2pt<Vector3d>(element_i.Node(0).Coordinate(), element_i.Node(1).Coordinate());
+								double ib = 0.5 * Distance_2pt<Vector3d>(element_i.Node(1).Coordinate(), element_i.Node(2).Coordinate());;
+
+								double Jj = element_j.Jacobi(S_IP_2D[Xj.Index()], T_IP_2D[Xj.Index()]);
+								double ja = 0.5 * Distance_2pt<Vector3d>(element_j.Node(0).Coordinate(), element_j.Node(1).Coordinate());
+								double jb = 0.5 * Distance_2pt<Vector3d>(element_j.Node(1).Coordinate(), element_j.Node(2).Coordinate());;
+
+								// Bond 单刚为12*12的矩阵
+								MatrixXd k;
+								k.resize(12, 12);
+								k.setZero();
+								for (int js = 0; js < IP_COUNT_1D; ++js)
 								{
-									for (int jt = 0; jt < 2; ++jt)
-									{
-										TCoordinate Xj = element_j.CoordinateInElement(s[js], t[jt]);
-										//	长度为0，表示计算到了自己本身
-										double L = Module<TCoordinate>(Xj - Xi);
-										if (L < ERR_VALUE)
-										{
-											break;
-										}
+									Eigen::MatrixXd BL = BL_Matrix_1D(L, S_IP_1D[js]);
+									k += BL.transpose() * D_PD * BL * H_IP_1D[js] * L;
+								}
+								// Bond 单刚
 
-										double thickness_j = element_j.Thickness();
-										double Jj = element_j.Jacobi(s[js], t[jt]);
-										
-										double ja = 0.5 * Distance_2pt<Vector3d>(element_j.Node(0).CoordinateCurrent(), element_j.Node(1).CoordinateCurrent());
-										double jb = 0.5 * Distance_2pt<Vector3d>(element_j.Node(1).CoordinateCurrent(), element_j.Node(2).CoordinateCurrent());;
+								Eigen::MatrixXd Nij = N_IJ(S_IP_2D[Xi.Index()], T_IP_2D[Xi.Index()], ia, ib, S_IP_2D[Xj.Index()], T_IP_2D[Xj.Index()], ja, jb);
+								Eigen::MatrixXd Tb = bond.T_b();
 
-										MatrixXd k = SK_LOCAL(cax, cby, cbz, ctor, L);
-										Eigen::MatrixXd Nij = N_IJ(s[is], t[it],ia, ib, s[js], t[jt], ja, jb);
+								// 0.5表示bond正反都会计算一次
+								SK += 0.5 * volume_scale * Ji * thickness_i * Jj * thickness_j * TE.transpose() * Nij.transpose() * Te * Tb.transpose() * k * Tb * Te.transpose() * Nij * TE;
+							}						
+						}
+					}
+				}
+				void				genGlobalStiffnessPD()
+				{
+					genSingleStiffnessPD();
 
-										//	方向要进行归一化处理
-										Eigen::Vector3d vec_ij = Xj - Xi;
-										Eigen::MatrixXd Tb = T_b(vec_ij);
+					TPdModel& pdModel = *m_pPdModel;
+					const set<int>& nids = pdModel.PdMeshCore().GetNodeIdsByAll();
+					const set<int>& eids = pdModel.PdMeshCore().GetElementIdsByAll();
 
-										// 0.5表示bond正反都会计算一次
-										SK += 0.5 * volume_scale * g(L,element_i.Horizon()) * Ji * Jj * TE.transpose() * Nij.transpose() * Te * Tb.transpose() * k * Tb * Te.transpose() * Nij * TE * thickness_i * thickness_j;
-									}
+					/************************************************************************/
+					/* 组装总刚矩阵                                                         */
+					/************************************************************************/
+					for (int ei : eids)
+					{
+						TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
+						//	将单元I和单元J对应的节点放入一个nids，长度为8
+						const vector<int>& nids_i = element_i.NodeIds();
+
+						VEC_FAMILY_ELEMENT& familyElements2 = element_i.FamilyElements();
+						for (TPdFamilyElement& family_elem : familyElements2)
+						{
+							int ej = family_elem.Id();
+							const TPdElement& element_j = pdModel.PdMeshCore().Element(ej);
+							const vector<int>& nids_j = element_j.NodeIds();
+
+							vector<int> nids(nids_i);
+							for (int nj : nids_j)
+							{
+								nids.push_back(nj);
+							}
+
+							const SingleStiffness& SK = family_elem.SK();
+							int LenOfSK = 48;
+
+							for (int row = 0; row < LenOfSK; ++row)
+							{
+								for (int col = 0; col < LenOfSK; ++col)
+								{
+									int Row = nids[row / DOF] * DOF + row % DOF;
+									int Col = nids[col / DOF] * DOF + col % DOF;
+									m_GK[Row][Col] += SK(row, col);
 								}
 							}
 						}
 					}
 				}
-				/************************************************************************/
-				/* 生成质量矩阵		  				                                    */
-				/************************************************************************/
+				void				updateStrainStressPD()
+				{
+					TPdModel& pdModel = *m_pPdModel;
+					set<int> eids = pdModel.PdMeshCore().GetElementIdsByAll();
+					//	更新非连续伽辽金单元积分点处的位移增量信息
+					parallel_for_each(eids.begin(), eids.end(), [&](int eid)
+						{
+							TPdElement& element = pdModel.PdMeshCore().Element(eid);
+							int nid1 = element.NodeId(0);
+							int nid2 = element.NodeId(1);
+							int nid3 = element.NodeId(2);
+							int nid4 = element.NodeId(3);
+							const double a = element.SideLength();
+							const double b = element.SideLength();
+
+							const TPdNode& node1 = pdModel.PdMeshCore().Node(nid1);
+							const TPdNode& node2 = pdModel.PdMeshCore().Node(nid2);
+							const TPdNode& node3 = pdModel.PdMeshCore().Node(nid3);
+							const TPdNode& node4 = pdModel.PdMeshCore().Node(nid4);
+
+							MatrixXd delta_u_global;
+							delta_u_global.resize(24, 1);
+							delta_u_global.block(0, 0, 6, 1) = node1.IteratorDisplacement();
+							delta_u_global.block(6, 0, 6, 1) = node2.IteratorDisplacement();
+							delta_u_global.block(12, 0, 6, 1) = node3.IteratorDisplacement();
+							delta_u_global.block(18, 0, 6, 1) = node4.IteratorDisplacement();
+
+							MatrixXd TE;
+							TE.resize(24, 24);
+							TE.setZero();
+							TE.block(0, 0, 3, 3) = element.LocalCoorSystem();
+							TE.block(3, 3, 3, 3) = element.LocalCoorSystem();
+							TE.block(6, 6, 6, 6) = TE.block(0, 0, 6, 6);
+							TE.block(12, 12, 6, 6) = TE.block(0, 0, 6, 6);
+							TE.block(18, 18, 6, 6) = TE.block(0, 0, 6, 6);
+						
+							MatrixXd delta_u_local = TE * delta_u_global;
+
+							MatrixXd TN;
+							TN.resize(6, 6);
+							TN.setZero();
+							TN.block(0, 0, 3, 3) = element.LocalCoorSystem();
+							TN.block(3, 3, 3, 3) = element.LocalCoorSystem();
+
+							double L = element.SideLength();
+							//	更新单元积分点处的位移增量（全局坐标系）
+							//	需要注意：要对单元中心处的积分点进行信息更新，因为单元I采用了形心
+							for (int is = 0; is <= IP_COUNT_2D; ++is)
+							{
+								Eigen::MatrixXd N = M_SF_RECTANGLE_SHELL(S_IP_2D[is], T_IP_2D[is], a, b);
+								//	通过TN将局部坐标系下的节点迭代步总量更新至全局坐标系下
+								element.IP(is).IteratorDisplacement() = TN.transpose() * N * delta_u_local;
+								element.IP(is).IncrementalDisplacement() += element.IP(is).IteratorDisplacement();
+							}
+						});
+
+					//	计算bond积分点处的应变和应力
+					parallel_for_each(eids.begin(), eids.end(), [&](int ei)
+						{
+							TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
+							//	对纯FEM区，不计算bond的相关信息
+							if (element_i.AnalysisElementType() != FEM_ELEMENT)
+							{
+								double alpha_i = element_i.Alpha();
+								const Eigen::Matrix4d& D_PD = element_i.CalParas().D_PD;
+								VEC_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+								for (TPdFamilyElement& family_elem : familyElements)
+								{
+									int nj = family_elem.Id();
+									const TPdElement& element_j = pdModel.PdMeshCore().Element(nj);
+									double alpha_j = element_j.Alpha();
+									double alpha = (alpha_i + alpha_j) / 2.0;
+									double volume_scale = family_elem.VolumeIndex();
+					
+									vector<TPdBond>& bonds = family_elem.Bonds();
+									for (TPdBond& bond : bonds)
+									{
+										const TBondPoint& Xi = bond.Xi();
+										const TBondPoint& Xj = bond.Xj();
+
+										double L = bond.BondLength();
+
+										MatrixXd delta_u_global;
+										delta_u_global.resize(12, 1);
+										delta_u_global.block(0, 0, 6, 1) = Xi.IteratorDisplacement();
+										delta_u_global.block(6, 0, 6, 1) = Xj.IteratorDisplacement();
+
+										MatrixXd T;
+										T.resize(12, 12);
+										T.setZero();
+										T.block(0, 0, 3, 3) = bond.LocalCoorSystem();
+										T.block(3, 3, 3, 3) = bond.LocalCoorSystem();
+										T.block(6, 6, 3, 3) = bond.LocalCoorSystem();
+										T.block(9, 9, 3, 3) = bond.LocalCoorSystem();
+
+										MatrixXd delta_u_local = T * delta_u_global;
+ 										for (int js = 0; js < IP_COUNT_1D; ++js)
+										{
+											Eigen::MatrixXd BL = BL_Matrix_1D(L, S_IP_1D[js]);
+											Eigen::MatrixXd BN_star = BN_star_Matrix_1D(L, S_IP_1D[js], delta_u_local);
+
+											TStrain_Bond delta_strain_local = (BL + BN_star) * delta_u_local;
+											TStress_Bond delta_stress_local = D_PD * delta_strain_local;
+
+											bond.MicroPotential() += ((bond.IP(js).StressCurrent() + delta_stress_local * 0.5).transpose() * delta_strain_local)(0, 0) * H_IP_1D[js] * L;
+											
+											bond.IP(js).StrainCurrent() += delta_strain_local;
+											bond.IP(js).StressCurrent() += delta_stress_local;
+										}
+									}
+								}
+							}
+						});
+				}
+				void				updateInnerForcePD()
+				{
+
+				}
+				void				updateInfoAfterConvergencePD()
+				{
+
+				}
+				void	 			calPdForces()
+				{
+					TPdModel& pdModel = *m_pPdModel;
+
+					/************************************************************************/
+					/* 每一步都需要将内力置零初始化                                         */
+					/************************************************************************/
+					const set<int> nids = pdModel.PdMeshCore().GetNodeIdsByAll();
+					parallel_for_each(nids.begin(), nids.end(), [&](int ni)
+						{
+							TPdNode& node = pdModel.PdMeshCore().Node(ni);
+							node.InnerForce().setZero();
+						});
+
+					/************************************************************************/
+					/* 计算单元I与单元J之间的力向量  48*1 矩阵                              */
+					/************************************************************************/
+					const set<int> eids = pdModel.PdMeshCore().GetElementIdsByAll();
+					parallel_for_each(eids.begin(), eids.end(), [&](int ei)
+						{
+							TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
+
+							VEC_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+							for (TPdFamilyElement& family_elem : familyElements)
+							{
+								int ej = family_elem.Id();
+								TPdElement& element_j = pdModel.PdMeshCore().Element(ej);
+							
+								//	将单元I和单元J对应的节点放入一个nids，长度为8							
+								vector<int> nids = element_i.NodeIds();								
+								for (int nj : element_j.NodeIds())
+								{
+									nids.push_back(nj);
+								}
+								const SingleStiffness& SK = family_elem.SK();
+
+								VectorXd DIS;
+								DIS.resize(48);
+								DIS.setZero();
+								int loop_Dis = 0;
+								for (int nid : nids)
+								{
+									DIS.block(6 * loop_Dis++, 0, 6, 1) = pdModel.PdMeshCore().Node(nid).Displacement();
+								}
+								family_elem.ForceOfBond() = SK * DIS;													
+							}
+						});
+
+					/************************************************************************/
+					/* 将所有的力向量累加到单元节点上去                                     */
+					/************************************************************************/
+					for (int ei : eids)
+					{
+						TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
+						VEC_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+						for (TPdFamilyElement& family_elem : familyElements)
+						{
+							int ej = family_elem.Id();
+							const TPdElement& element_j = pdModel.PdMeshCore().Element(ej);
+							vector<int> nids = element_i.NodeIds();
+							const vector<int>& nids_j = element_j.NodeIds();							
+							for (int nj : nids_j)
+							{
+								nids.push_back(nj);
+							}
+							const VectorXd& FORCE = family_elem.ForceOfBond();
+							
+							int loop_force = 0;
+							for (int ni : nids)
+							{
+								pdModel.PdMeshCore().Node(ni).InnerForce() += FORCE.block(6 * loop_force++, 0, 6, 1);
+							}
+						}
+					}
+				}
 				void				genGlobalMassPD()
 				{
+					double start = clock();
 					TPdModel& pdModel = *m_pPdModel;
 
 					int nCount = pdModel.PdMeshCore().NodeCount();
@@ -588,110 +751,18 @@ namespace DLUT
 							{
 								int CurPos = ni * DOF;
 								m_GM[CurPos][CurPos] += Rho * A * h / 4.0;
-								m_GM[CurPos+1][CurPos+1] += Rho * A * h / 4.0;
-								m_GM[CurPos+2][CurPos+2] += Rho * A * h / 4.0;
+								m_GM[CurPos + 1][CurPos + 1] += Rho * A * h / 4.0;
+								m_GM[CurPos + 2][CurPos + 2] += Rho * A * h / 4.0;
 
-								m_GM[CurPos+3][CurPos+3] += Rho * A * pow(h,3) / 24.0;
-								m_GM[CurPos+4][CurPos+4] += Rho * A * pow(h, 3) / 24.0;
-								m_GM[CurPos+5][CurPos+5] += Rho * A * pow(h, 3) / 12.0;
+								m_GM[CurPos + 3][CurPos + 3] += Rho * A * pow(h, 3) / 24.0;
+								m_GM[CurPos + 4][CurPos + 4] += Rho * A * pow(h, 3) / 24.0;
+								m_GM[CurPos + 5][CurPos + 5] += Rho * A * pow(h, 3) / 12.0;
 							}
 						}
 					}
-				}
-				/************************************************************************/
-				/* 计算PD点之间的力密度	                                                */
-				/************************************************************************/
-				void				calPdForces()
-				{
-					TPdModel& pdModel = *m_pPdModel;
-
-					/************************************************************************/
-					/* 每一步都需要将内力置零初始化                                         */
-					/************************************************************************/
-					const set<int> nids = pdModel.PdMeshCore().GetNodeIdsByAll();
-					parallel_for_each(nids.begin(), nids.end(), [&](int ni)
-						{
-							TPdNode& node = pdModel.PdMeshCore().Node(ni);
-							node.InnerForce().setZero();
-						});
-
-					const set<int> eids = pdModel.PdMeshCore().GetElementIdsByAll();
-					parallel_for_each(eids.begin(), eids.end(), [&](int ei)
-						{
-							TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
-							//	将单元I和单元J对应的节点放入一个nids，长度为8
-							vector<int> nids_i = element_i.NodeIds();
-
-							map<int, TPdBond>& familyBonds = element_i.FamilyElementBonds();
-							for (map<int, TPdBond>::iterator iter = familyBonds.begin();
-								iter != familyBonds.end(); ++iter)
-							{
-								int ej = iter->first;
-								TPdElement& element_j = pdModel.PdMeshCore().Element(ej);
-								vector<int> nids_j = element_j.NodeIds();
-								const SingleStiffness& SK = iter->second.SK();
-
-								VectorXd DIS;
-								DIS.resize(48);
-								DIS.setZero();
-								int loop_Dis = 0;
-								for (int ni : nids_i)
-								{
-									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(ni).Displacement().x();
-									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(ni).Displacement().y();
-									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(ni).Displacement().z();
-									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(ni).Displacement().rx();
-									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(ni).Displacement().ry();
-									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(ni).Displacement().rz();
-								}
-								for (int nj : nids_j)
-								{
-									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(nj).Displacement().x();
-									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(nj).Displacement().y();
-									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(nj).Displacement().z();
-									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(nj).Displacement().rx();
-									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(nj).Displacement().ry();
-									DIS[loop_Dis++] = pdModel.PdMeshCore().Node(nj).Displacement().rz();
-								}
-
-								iter->second.ForceOfBond() = SK * DIS;
-							}
-						});
-
-					for (int ei : eids)
-					{
-						TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
-						vector<int> nids_i = element_i.NodeIds();
-						map<int, TPdBond>& familyBonds = element_i.FamilyElementBonds();
-						for (const pair<int, TPdBond>& bondInfo : familyBonds)
-						{
-							int ej = bondInfo.first;
-							TPdElement& element_j = pdModel.PdMeshCore().Element(ej);
-							const VectorXd& FORCE = bondInfo.second.ForceOfBond();
-							vector<int> nids_j = element_j.NodeIds();
-
-							int loop_force = 0;
-							for (int ni : nids_i)
-							{
-								pdModel.PdMeshCore().Node(ni).InnerForce().x() += FORCE[loop_force++];
-								pdModel.PdMeshCore().Node(ni).InnerForce().y() += FORCE[loop_force++];
-								pdModel.PdMeshCore().Node(ni).InnerForce().z() += FORCE[loop_force++];
-								pdModel.PdMeshCore().Node(ni).InnerForce().rx() += FORCE[loop_force++];
-								pdModel.PdMeshCore().Node(ni).InnerForce().ry() += FORCE[loop_force++];
-								pdModel.PdMeshCore().Node(ni).InnerForce().rz() += FORCE[loop_force++];
-							}
-							for (int nj : nids_j)
-							{
-								pdModel.PdMeshCore().Node(nj).InnerForce().x() += FORCE[loop_force++];
-								pdModel.PdMeshCore().Node(nj).InnerForce().y() += FORCE[loop_force++];
-								pdModel.PdMeshCore().Node(nj).InnerForce().z() += FORCE[loop_force++];
-								pdModel.PdMeshCore().Node(nj).InnerForce().rx() += FORCE[loop_force++];
-								pdModel.PdMeshCore().Node(nj).InnerForce().ry() += FORCE[loop_force++];
-								pdModel.PdMeshCore().Node(nj).InnerForce().rz() += FORCE[loop_force++];
-							}
-						}
-					}
-				}
+					double total_time = (clock() - start) / 1000;
+					cout << "genGlobalMassPD():\t\t" << total_time << endl;
+				}		
 			private:
 				Eigen::MatrixXd N_IJ(double is, double it, double ia, double ib, double js, double jt, double ja, double jb)
 				{
@@ -699,18 +770,8 @@ namespace DLUT
 					Res.resize(12, 48);
 					Res.setZero();
 
-					double pI[4] = { -1, 1, 1, -1 };
-					double qI[4] = { -1, -1, 1, 1 };
-
-					Res.block(0, 0, 6, 6) = N_Ipq(is, it, pI[0], qI[0], ia, ib);
-					Res.block(0, 6, 6, 6) = N_Ipq(is, it, pI[1], qI[1], ia, ib);
-					Res.block(0, 12, 6, 6) = N_Ipq(is, it, pI[2], qI[2], ia, ib);
-					Res.block(0, 18, 6, 6) = N_Ipq(is, it, pI[3], qI[3], ia, ib);
-
-					Res.block(6, 24, 6, 6) = N_Ipq(js, jt, pI[0], qI[0], ja, jb);
-					Res.block(6, 30, 6, 6) = N_Ipq(js, jt, pI[1], qI[1], ja, jb);
-					Res.block(6, 36, 6, 6) = N_Ipq(js, jt, pI[2], qI[2], ja, jb);
-					Res.block(6, 42, 6, 6) = N_Ipq(js, jt, pI[3], qI[3], ja, jb);
+					Res.block(0, 0, 6, 24) = M_SF_RECTANGLE_SHELL(is, it, ia, ib);
+					Res.block(6, 24, 6, 24) = M_SF_RECTANGLE_SHELL(js, jt, ja, jb);
 
 					return Res;
 				}
@@ -746,7 +807,8 @@ namespace DLUT
 					}
 
 					return Res;
-				}
+				}	
+
 				Eigen::Matrix3d LAMDA(const Vector3d& localVector)
 				{
 					Eigen::Matrix3d T;
@@ -801,33 +863,8 @@ namespace DLUT
 
 					return Res;
 				}
-				Eigen::MatrixXd N_Ipq(double p, double q, double pI, double qI, double a, double b)
-				{
-					Eigen::MatrixXd Res;
-					Res.resize(6, 6);
-					Res.setZero();
-
-					Res(0, 0) = (1 + p * pI) * (1 + q * qI) / 4.0;
-					Res(1, 1) = Res(0, 0);
-
-					Res(2, 2) = -((1 + pI * p) * (1 + qI * q) * (p * p + q * q - pI * p - qI * q - 2)) / 8.0;
-					Res(2, 3) = b * qI * ((1 + pI * p) * (1 + qI * q) * (1 + qI * q) * (qI * q - 1))/ 8.0;
-					Res(2, 4) = -a * pI * ((1 + pI * p) * (1 + pI * p) * (1 + qI * q) * (pI * p - 1)) / 8.0;
-
-					Res(3, 2) = (-qI * (pI * p + 1) * (3 * q * q + p * p - pI * p - 3)) / (b * 8.0);
-					Res(3, 3) = (b * (3 * qI * q - 1) * (1 + pI * p) * (1 + qI * q)) / (b * 8.0);
-					Res(3, 4) = (-a * pI * qI * (1 + pI * p) * (1 + pI * p) * (pI * p - 1)) / (b * 8.0);
-		
-					Res(4, 2) = (-pI * (qI * q + 1) * (3 * p * p + q * q - qI * q -3))/ (-a * 8.0);
-					Res(4, 3) = (b * pI * qI * (qI * q + 1) * (qI * q + 1) * (qI * q - 1)) / (-a * 8.0);
-					Res(4, 4) = (-a * (3 * pI * p - 1) * (pI * p + 1) * (qI * q + 1)) / (-a * 8.0);
-
-					Res(5, 5) = Res(0, 0);
-
-					return Res;
-				}
 				Eigen::MatrixXd SK_LOCAL(double cax, double cby, double cbz, double ctor, double L)
-				{		
+				{
 					MatrixXd k;
 					k.resize(12, 12);
 					k.setZero();
@@ -886,25 +923,162 @@ namespace DLUT
 
 					return k;
 				}
-				double			g(double xi, double delta)
+
+			private:
+				/************************************************************************/
+				/* Begin of FEM															*/
+				/************************************************************************/
+				void				genSingleStiffnessFEM()
 				{
-					if (xi > delta)
+
+				}
+				void				genGlobalStiffnessFEM()
+				{
+
+				}
+				void				updateStrainStressFEM()
+				{
+
+				}
+				void				updateInnerForceFEM()
+				{
+
+				}
+				void				updateInfoAfterConvergenceFEM()
+				{
+					TPdModel& pdModel = *m_pPdModel;
+					set<int> eids = pdModel.PdMeshCore().GetElementIdsByAll();
+					set<int> nids = pdModel.PdMeshCore().GetNodeIdsByAll();
+
+					//	更新FEM节点信息
+					parallel_for_each(nids.begin(), nids.end(), [&](int nid)
+						{
+							TPdNode& node = pdModel.PdMeshCore().Node(nid);
+							/************************************************************************/
+							/* 当前增量步的位移累加到全局节点总位移                                 */
+							/* 节点当前步的位移更新为上一步位移+当前增量步的位移                    */
+							/************************************************************************/
+							node.Displacement() += node.IncrementalDisplacement();
+							node.Coordinate() += node.IncrementalDisplacement().block(0, 0, 3, 1);
+						});
+				}
+				/************************************************************************/
+				/* End of FEM															*/
+				/************************************************************************/
+								
+				/************************************************************************/
+				/* Begin of PD&FEM														*/
+				/************************************************************************/
+				Eigen::MatrixXd		G_Matrix_1D(double L, double chi)
+				{
+					Eigen::MatrixXd Res;
+					Res.resize(2, 12);
+					Res.setZero();
+
+					Res(0, 2) = 6 * (chi * chi - chi) / L;
+					Res(0, 4) = -(3 * chi * chi - 4 * chi + 1);
+					Res(0, 8) = -Res(0, 2);
+					Res(0, 10) = -(3 * chi * chi - 2 * chi);
+
+					Res(1, 1) = 6 * (chi * chi - chi) / L;
+					Res(1, 5) = (3 * chi * chi - 4 * chi + 1);
+					Res(1, 7) = -Res(0, 2);
+					Res(1, 11) = (3 * chi * chi - 2 * chi);
+
+					return Res;
+				}
+				Eigen::MatrixXd		BL_Matrix_1D(double L, double chi)
+				{
+					Eigen::MatrixXd Res;
+					Res.resize(4, 12);
+					Res.setZero();
+
+					Res(0, 0) = -1.0 / L;
+					Res(0, 6) = 1.0 / L;
+
+					Res(1, 2) = (12 * chi - 6) / (L * L);
+					Res(1, 4) = -(6 * chi - 4) / L;
+					Res(1, 8) = -Res(1, 2);
+					Res(1, 10) = -(6 * chi - 2) / L;
+
+					Res(2, 1) = (12 * chi - 6) / (L * L);
+					Res(2, 5) = (6 * chi - 4) / L;
+					Res(2, 7) = -Res(2, 1);
+					Res(2, 11) = (6 * chi - 2) / L;
+
+					Res(3, 3) = -1.0 / L;
+					Res(3, 9) = 1.0 / L;
+
+					return Res;
+				}
+				Eigen::MatrixXd		BN_star_Matrix_1D(double L, double chi, const MatrixXd& delta_u)
+				{
+					Eigen::MatrixXd Res;
+					Res.resize(4, 12);
+					Res.setZero();
+
+					//Eigen::MatrixXd G = G_Matrix_1D(L, chi);
+
+					//Eigen::MatrixXd delta_A;
+					//delta_A.resize(4, 2);
+					//delta_A.setZero();
+					//delta_A.block(0, 0, 1, 2) = (G * delta_u).transpose();
+
+					//Res = 0.5 * delta_A * G;
+
+					return Res;
+				}
+
+				bool				isConvergenced()
+				{
+					bool CONVERGENCED = true;
+
+					TPdModel& pdModel = *m_pPdModel;
+					set<int> nids = pdModel.PdMeshCore().GetNodeIdsByAll();
+					double MaxOfIterU = -1E20;
+					double MaxOfIncrU = -1E20;
+
+					double MaxOfIterDisp = -1E20;
+
+					for (int nid : nids)
 					{
-						xi = delta;
+						TPdNode& node = pdModel.PdMeshCore().Node(nid);
+						const vector<TBoundaryPrescribedMotion>& BPMs = node.BoundaryPreMotion();
+						//	施加强制位移的节点不作为平衡判断的点
+						if (BPMs.size() == 0)
+						{
+							double IterDisp = Module(node.IteratorDisplacement());
+							if (IterDisp > MaxOfIterDisp)
+							{
+								MaxOfIterDisp = IterDisp;
+							}
+
+							//for (int loop_dim = 0; loop_dim < DOF; ++loop_dim)
+							//{
+							//	double IterU = abs(node.IteratorDisplacement()[loop_dim]);
+							//	double IncreU = abs(node.IncrementalDisplacement()[loop_dim]);
+							//	if (IncreU > MaxOfIncrU)
+							//	{
+							//		MaxOfIncrU = IncreU;
+							//		MaxOfIterU = IterU;
+							//	}
+							//}
+						}
 					}
-					double res = 0;
-					switch (DLUT::SAE::PERIDYNAMIC::INFLUENCE_FUNC)
+
+
+					/*double ratio = MaxOfIterU / MaxOfIncrU;
+					if (ratio > CONVERGENCE_FACTOR)*/
+					if (MaxOfIterDisp > CONVERGENCE_FACTOR)
 					{
-					case 1:
-						res = 1.0;
-						break;
-					case 2:
-						res = 1.0 - xi / delta;
-						break;
-					default:
-						break;
+						CONVERGENCED = false;
 					}
-					return res;
+					else
+					{
+						CONVERGENCED = true;
+					}
+
+					return CONVERGENCED;
 				}
 			private:			
 				vector< map<int, double> >	m_GK;	//	Stiffness matrix

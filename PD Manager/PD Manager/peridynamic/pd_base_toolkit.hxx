@@ -131,7 +131,18 @@ namespace DLUT
 			template<typename Type>
 			double Calculate_COS(const Type& v1, const Type& v2)
 			{
-				return (Point_Multi(v1, v2) / (Module(v1) * Module(v2)));
+				double PM = Point_Multi(v1, v2);
+				double MM = (Module(v1) * Module(v2));
+				double cosTheta = PM / MM;
+				if (cosTheta > 1)
+				{
+					cosTheta = 1;
+				}
+				else if (cosTheta < -1)
+				{
+					cosTheta = -1;
+				}
+				return cosTheta;
 			}
 			//	计算三点构成平面的法线
 			template<typename Type>

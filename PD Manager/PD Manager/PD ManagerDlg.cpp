@@ -60,7 +60,8 @@ CPDManagerDlg::CPDManagerDlg(CWnd* pParent /*=NULL*/)
 	, m_load_step(1)
 	, m_radio_horizon_type(0)
 	, m_d_const_horizon(3.0)
-	, m_infuence_func(1)
+	, m_max_iter_nums(0)
+	, m_convergence_factor(0)
 {
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 }
@@ -77,7 +78,8 @@ void CPDManagerDlg::DoDataExchange(CDataExchange* pDX)
 	DDX_Text(pDX, IDC_EDIT_LOAD_STEP, m_load_step);
 	DDX_Radio(pDX, IDC_RADIO_CONSTANT_HORIZON, m_radio_horizon_type);
 	DDX_Text(pDX, IDC_EDIT_CONSTANT_HORIZON, m_d_const_horizon);
-	DDX_Text(pDX, IDC_EDIT_INFLUENCE_FUNC, m_infuence_func);
+	DDX_Text(pDX, IDC_EDIT_MAX_ITERATOR_NUMS, m_max_iter_nums);
+	DDX_Text(pDX, IDC_EDIT_CONVERGENCE_FACTOR, m_convergence_factor);
 }
 
 BEGIN_MESSAGE_MAP(CPDManagerDlg, CDialogEx)
@@ -88,7 +90,6 @@ BEGIN_MESSAGE_MAP(CPDManagerDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_RADIO_IMPLICIT, &CPDManagerDlg::OnBnClickedRadioImplicit)
 	ON_BN_CLICKED(IDOK, &CPDManagerDlg::OnBnClickedOk)
 	ON_BN_CLICKED(IDC_RADIO_EXPLICIT, &CPDManagerDlg::OnBnClickedRadioExplicit)
-	ON_BN_CLICKED(IDC_RADIO_MODAL, &CPDManagerDlg::OnBnClickedRadioModal)
 	ON_BN_CLICKED(IDC_RADIO_CONSTANT_HORIZON, &CPDManagerDlg::OnBnClickedRadioConstantHorizon)
 	ON_BN_CLICKED(IDC_RADIO_CONSTANT_M, &CPDManagerDlg::OnBnClickedRadioConstantM)
 END_MESSAGE_MAP()
@@ -200,8 +201,12 @@ void CPDManagerDlg::OnBnClickedRadioImplicit()
 	UpdateData(TRUE);
 	
 	GetDlgItem(IDC_EDIT_LOAD_STEP)->EnableWindow(TRUE);
+	GetDlgItem(IDC_EDIT_MAX_ITERATOR_NUMS)->EnableWindow(TRUE);
+	GetDlgItem(IDC_EDIT_CONVERGENCE_FACTOR)->EnableWindow(TRUE);
+
 	GetDlgItem(IDC_EDIT_TIME_STEP)->EnableWindow(FALSE);
 	GetDlgItem(IDC_EDIT_ITERATOR_NUMS)->EnableWindow(FALSE);
+	GetDlgItem(IDC_EDIT_PLOT_FRAME)->EnableWindow(FALSE);
 		
 	UpdateData(FALSE);
 }
@@ -212,22 +217,12 @@ void CPDManagerDlg::OnBnClickedRadioExplicit()
 	UpdateData(TRUE);
 
 	GetDlgItem(IDC_EDIT_LOAD_STEP)->EnableWindow(FALSE);
+	GetDlgItem(IDC_EDIT_MAX_ITERATOR_NUMS)->EnableWindow(FALSE);
+	GetDlgItem(IDC_EDIT_CONVERGENCE_FACTOR)->EnableWindow(FALSE);
+
 	GetDlgItem(IDC_EDIT_TIME_STEP)->EnableWindow(TRUE);
 	GetDlgItem(IDC_EDIT_ITERATOR_NUMS)->EnableWindow(TRUE);
-
-	UpdateData(FALSE);
-}
-
-void CPDManagerDlg::OnBnClickedRadioModal()
-{
-	// TODO: 在此添加控件通知处理程序代码
-	UpdateData(TRUE);
-
-	GetDlgItem(IDC_EDIT_LOAD_STEP)->EnableWindow(FALSE);
-	GetDlgItem(IDC_EDIT_TIME_STEP)->EnableWindow(FALSE);
-	GetDlgItem(IDC_EDIT_ITERATOR_NUMS)->EnableWindow(FALSE);
-
-	m_plot_frames = 12;
+	GetDlgItem(IDC_EDIT_PLOT_FRAME)->EnableWindow(TRUE);
 
 	UpdateData(FALSE);
 }
@@ -274,13 +269,7 @@ void CPDManagerDlg::OnBnClickedOk()
 
 	string fp_lsdyna = CW2A(m_fp_information.GetString());
 
-//	PdProduct<TSolverBBPD> product;
 	PdProduct<TSolverBeamPD> product;
-
-	product.SetFilePath(fp_lsdyna);
-	product.SetCalculateParas(m_load_step, m_time_step, m_iterator_nums, m_plot_frames);
-
-	product.SetInfluenceFunc(m_infuence_func);
 
 	if (m_radio_horizon_type == 0)
 	{
@@ -292,13 +281,22 @@ void CPDManagerDlg::OnBnClickedOk()
 		product.SetUsedConstantHorizon(false);
 		product.SetRatioOfHorizonMeshsize(m_ratio_of_delta_meshsize);
 	}
+	product.SetFilePath(fp_lsdyna);
 
 	if (m_radio_analysis_type == 0)
 	{
+		product.SetLoadStep(m_load_step);
+		product.SetConvergenceFactor(m_convergence_factor);
+		product.SetMaxIteratorNums(m_max_iter_nums);
+
 		product.ImplicitAnalysis();
 	}
 	else if (m_radio_analysis_type == 1)
 	{
+		product.SetTimeStep(m_time_step);
+		product.SetIteratorNums(m_iterator_nums);
+		product.SetPlotFrames(m_plot_frames);
+
 		product.ExplicitAnalysis();
 	}
 
