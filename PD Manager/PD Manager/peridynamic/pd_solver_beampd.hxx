@@ -429,10 +429,10 @@ namespace DLUT
 						double thickness_j = element_j.Thickness();
 
 						double ia = 0.5 * Distance_2pt<Vector3d>(element_i.Node(0).Coordinate(), element_i.Node(1).Coordinate());
-						double ib = 0.5 * Distance_2pt<Vector3d>(element_i.Node(1).Coordinate(), element_i.Node(2).Coordinate());;
+						double ib = 0.5 * Distance_2pt<Vector3d>(element_i.Node(1).Coordinate(), element_i.Node(2).Coordinate());
 
 						double ja = 0.5 * Distance_2pt<Vector3d>(element_j.Node(0).Coordinate(), element_j.Node(1).Coordinate());
-						double jb = 0.5 * Distance_2pt<Vector3d>(element_j.Node(1).Coordinate(), element_j.Node(2).Coordinate());;
+						double jb = 0.5 * Distance_2pt<Vector3d>(element_j.Node(1).Coordinate(), element_j.Node(2).Coordinate());
 
 						SingleStiffness& SK = family_elem.SK();
 						SK.setZero();
@@ -465,12 +465,15 @@ namespace DLUT
 								}
 								// Bond 单刚
 
-								Eigen::MatrixXd Nij = N_IJ(S_IP_2D[Xi.Index()], T_IP_2D[Xi.Index()], ia, ib, S_IP_2D[Xj.Index()], T_IP_2D[Xj.Index()], ja, jb);
-								Eigen::MatrixXd Tb = bond.T_b();
+						//		Eigen::MatrixXd Nij = N_IJ(S_IP_2D[Xi.Index()], T_IP_2D[Xi.Index()], ia, ib, S_IP_2D[Xj.Index()], T_IP_2D[Xj.Index()], ja, jb);
+						//		Eigen::MatrixXd Tb = bond.T_b();
 
 								//	0.5表示bond正反都会计算一次
 						//		SK += 0.5 * volume_scale * Ji * thickness_i * Jj * thickness_j * TE.transpose() * Nij.transpose() * Te * Tb.transpose() * k * Tb * Te.transpose() * Nij * TE;
-								SK += 0.5 * volume_scale * element_i.Area() * thickness_i * Jj * thickness_j * TE.transpose() * Nij.transpose() * Te * Tb.transpose() * k * Tb * Te.transpose() * Nij * TE;
+						//		SK += 0.5 * volume_scale * element_i.Area() * thickness_i * Jj * thickness_j * TE.transpose() * Nij.transpose() * Te * Tb.transpose() * k * Tb * Te.transpose() * Nij * TE;
+
+								Eigen::Matrix<double, 12, 48> TbTetNijTE = Tb_Tet_Nij_TE(element_i, element_j, bond);
+								SK += 0.5 * volume_scale * element_i.Area() * thickness_i * Jj * thickness_j * TbTetNijTE.transpose() * k * TbTetNijTE;
 							}
 						}
 					}
@@ -754,6 +757,57 @@ namespace DLUT
 					cout << "genGlobalMassPD():\t\t" << total_time << endl;
 				}		
 			private:
+				Eigen::Matrix<double, 12, 48> Tb_Tet_Nij_TE(const TPdElement& element_i, const TPdElement& element_j, const TPdBond& bond)
+				{
+					Eigen::Matrix<double, 12, 48> Res;
+					Res.setZero();
+
+					const TBondPoint& Xi = bond.Xi();
+					const TBondPoint& Xj = bond.Xj();
+					Eigen::MatrixXd BondCoordSys = bond.LocalCoorSystem();
+					double ia = 0.5 * Distance_2pt<Vector3d>(element_i.Node(0).Coordinate(), element_i.Node(1).Coordinate());
+					double ib = 0.5 * Distance_2pt<Vector3d>(element_i.Node(1).Coordinate(), element_i.Node(2).Coordinate());
+
+					double ja = 0.5 * Distance_2pt<Vector3d>(element_j.Node(0).Coordinate(), element_j.Node(1).Coordinate());
+					double jb = 0.5 * Distance_2pt<Vector3d>(element_j.Node(1).Coordinate(), element_j.Node(2).Coordinate());
+
+					
+					Eigen::Matrix<double, 6, 6> lamda;
+					lamda.setZero();
+					lamda.block(0, 0, 3, 3) = bond.LocalCoorSystem();
+					lamda.block(3, 3, 3, 3) = bond.LocalCoorSystem();
+
+					Eigen::Matrix<double, 6, 6> Tei;
+					Tei.setZero();
+					Tei.block(0, 0, 3, 3) = element_i.LocalCoorSystem();
+					Tei.block(3, 3, 3, 3) = element_i.LocalCoorSystem();
+		
+					Matrix<double, 6, 24> Ni = M_SF_RECTANGLE_SHELL(S_IP_2D[Xi.Index()], T_IP_2D[Xi.Index()], ia, ib);
+
+					Eigen::Matrix<double, 24, 24> TEi;
+					TEi.setZero();
+					TEi.block(0, 0, 6, 6) = Tei;
+					TEi.block(6, 6, 6, 6) = Tei;
+
+					Res.block(0, 0, 6, 24) = lamda * Tei * Ni * TEi;
+
+					Eigen::Matrix<double, 6, 6> Tej;
+					Tej.setZero();
+					Tej.block(0, 0, 3, 3) = element_j.LocalCoorSystem();
+					Tej.block(3, 3, 3, 3) = element_j.LocalCoorSystem();
+			
+					Matrix<double, 6, 24> Nj = M_SF_RECTANGLE_SHELL(S_IP_2D[Xj.Index()], T_IP_2D[Xj.Index()], ja, jb);
+
+					Eigen::Matrix<double, 24, 24> TEj;
+					TEj.setZero();
+					TEj.block(0, 0, 6, 6) = Tej;
+					TEj.block(6, 6, 6, 6) = Tej;
+
+					Res.block(6, 24, 6, 24) = lamda * Tej * Nj * TEj;
+
+					return Res;
+				}
+
 				Eigen::MatrixXd N_IJ(double is, double it, double ia, double ib, double js, double jt, double ja, double jb)
 				{
 					Eigen::MatrixXd Res;

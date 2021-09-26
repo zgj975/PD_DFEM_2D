@@ -123,7 +123,6 @@ namespace DLUT
 					m_eid_j = eid;
 					m_volume_index = volume_index;
 					m_bonds.clear();
-					m_b_update = true;
 				}
 			public:
 				int						Id() const { return m_eid_j; }
@@ -147,15 +146,12 @@ namespace DLUT
 				const SingleStiffness&	SK() const { return m_single_stiffness; }
 				Eigen::VectorXd&		ForceOfBond() { return m_force; }
 				const Eigen::VectorXd&	ForceOfBond() const { return m_force; }
-				const bool				ShouldBeUpdate() const { return m_b_update; }
-				bool&					ShouldBeUpdate() { return m_b_update; }
 			private:
 				int						m_eid_j;				//	Element J
 				double					m_volume_index;			//	Modified volume
 				vector<TPdBond>			m_bonds;				//	TPdBonds.
 				SingleStiffness			m_single_stiffness;		//	Single stiffness matrix of Bond_ij
 				Eigen::VectorXd			m_force;				//	FORCE vector of Element_ij
-				bool					m_b_update;				//	SK should be updated?
 			};
 
 			typedef list<TPdFamilyElement> LIST_NJ_FAMILY_ELEMENT;
@@ -167,7 +163,7 @@ namespace DLUT
 			public:
 				TPdElement(vector<TNodeBase>& vecNode) : TElementBase(vecNode)
 				{
-					m_map_family_elements.clear();
+					m_list_family_elements.clear();
 					m_d_init_bond_nums = 0;
 					m_alpha = 0;
 				}
@@ -178,11 +174,11 @@ namespace DLUT
 				}				
 			public:
 				//	The family nodes informations and operations
-				int						FamilyElementCount() const { return (int)m_map_family_elements.size(); }
-				LIST_NJ_FAMILY_ELEMENT&	FamilyElements() { return m_map_family_elements; }
-				const LIST_NJ_FAMILY_ELEMENT& FamilyElements() const { return m_map_family_elements; }
-				void					InsertFamilyElement(int eId, double volume_index) { m_map_family_elements.push_back(TPdFamilyElement(eId, volume_index)); }
-				void					ClearFamilyElements() { m_map_family_elements.clear(); }
+				int						FamilyElementCount() const { return (int)m_list_family_elements.size(); }
+				LIST_NJ_FAMILY_ELEMENT&	FamilyElements() { return m_list_family_elements; }
+				const LIST_NJ_FAMILY_ELEMENT& FamilyElements() const { return m_list_family_elements; }
+				void					InsertFamilyElement(int eId, double volume_index) { m_list_family_elements.push_back(TPdFamilyElement(eId, volume_index)); }
+				void					ClearFamilyElements() { m_list_family_elements.clear(); }
 			public:
 				const TPdCalculateParas&	CalParas() const { return m_pd_paras; }
 				TPdCalculateParas&			CalParas() { return m_pd_paras; }
@@ -227,7 +223,7 @@ namespace DLUT
 				double&					Alpha() { return m_alpha; }
 
 			private:
-				LIST_NJ_FAMILY_ELEMENT	m_map_family_elements;				//	Bond informations
+				LIST_NJ_FAMILY_ELEMENT	m_list_family_elements;				//	Bond informations
 				TPdCalculateParas		m_pd_paras;							//	Calculate parameters of PD Element
 				double					m_d_init_bond_nums;					//	Initial volumes for damage calculation
 			private:

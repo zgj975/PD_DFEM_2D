@@ -8,10 +8,9 @@ namespace DLUT
 		namespace PERIDYNAMIC
 		{
 			//	Beam单元形函数，其中Chi范围为[0,1]
-			Eigen::MatrixXd		N_SF_BEAM(double L, double Chi)
+			Eigen::Matrix<double, 6, 12>		N_SF_BEAM(double L, double Chi)
 			{
-				Eigen::MatrixXd Res;
-				Res.resize(6, 12);
+				Eigen::Matrix<double, 6, 12> Res;
 				Res.setZero();
 				Res(0, 0) = 1 - Chi;
 				Res(0, 6) = Chi;
@@ -43,10 +42,9 @@ namespace DLUT
 			}
 
 			//	Rod单元形函数，其中Chi范围为[0,1]
-			Eigen::MatrixXd		N_SF_ROD(double Chi)
+			Eigen::Matrix<double, 3, 6>			N_SF_ROD(double Chi)
 			{
-				Eigen::MatrixXd Res;
-				Res.resize(3, 6);
+				Eigen::Matrix<double, 3, 6> Res;
 				Res.setZero();
 				Res(0, 0) = 1 - Chi;
 				Res(0, 3) = Chi;
@@ -59,10 +57,9 @@ namespace DLUT
 			}
 
 			//	矩形单元Plane形函数，其中s和t范围均为[-1,1]
-			Eigen::MatrixXd		M_SF_RECTANGLE_PLANE(double s, double t)
+			Eigen::Matrix<double, 3, 12>		M_SF_RECTANGLE_PLANE(double s, double t)
 			{
-				Eigen::MatrixXd Res;
-				Res.resize(3, 12);
+				Eigen::Matrix<double, 3, 12> Res;
 				Res.setZero();
 				double N1 = (1 - s) * (1 - t) / 4.0;
 				double N2 = (1 + s) * (1 - t) / 4.0;
@@ -78,10 +75,9 @@ namespace DLUT
 			}
 
 			//	矩形单元Shell形函数，其中s和t范围均为[-1,1]
-			Eigen::MatrixXd		N_Ipq(double p, double q, double pI, double qI, double a, double b)
+			Eigen::Matrix<double, 6, 6>		N_Ipq(double p, double q, double pI, double qI, double a, double b)
 			{
-				Eigen::MatrixXd Res;
-				Res.resize(6, 6);
+				Eigen::Matrix<double, 6, 6>	 Res;
 				Res.setZero();
 
 				Res(0, 0) = (1 + p * pI) * (1 + q * qI) / 4.0;
@@ -103,10 +99,9 @@ namespace DLUT
 
 				return Res;
 			}	
-			Eigen::MatrixXd		M_SF_RECTANGLE_SHELL(double s, double t, double a, double b)
+			Eigen::Matrix<double, 6, 24>	M_SF_RECTANGLE_SHELL(double s, double t, double a, double b)
 			{
-				Eigen::MatrixXd Res;
-				Res.resize(6, 24);
+				Eigen::Matrix<double, 6, 24> Res;
 				Res.setZero();
 
 				double pI[4] = { -1, 1, 1, -1 };
