@@ -60,8 +60,8 @@ CPDManagerDlg::CPDManagerDlg(CWnd* pParent /*=NULL*/)
 	, m_load_step(1)
 	, m_radio_horizon_type(0)
 	, m_d_const_horizon(3.0)
-	, m_max_iter_nums(0)
-	, m_convergence_factor(0)
+	, m_max_iter_nums(100)
+	, m_convergence_factor(0.001)
 {
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 }

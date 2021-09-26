@@ -445,10 +445,7 @@ namespace DLUT
 					const Matrix3d& T = m_local_coord_system;
 					Eigen::Matrix<double, 4, 4> ST;
 					vector<int> nids = NodeIds();
-					if (MeshElementType() == TRIANGLE_ELEMENT)
-					{
-						nids.push_back(nids.back());
-					}
+					
 					Vector4d Xc;
 					Vector4d Yc;
 					for (int i = 0; i < 4; ++i)

@@ -566,7 +566,7 @@ namespace DLUT
 					}
 
 					double total_time = (clock() - start) / 1000;
-					cout << "UpdatePartInfo(): \t" << total_time << endl;
+					cout << "UpdatePartInfo(): \t\t" << total_time << endl;
 				}
 				void				UpdateFamilyInParts()
 				{
@@ -585,6 +585,7 @@ namespace DLUT
 						string stype = section.Type();
 
 						const set<int>& eleIds = part.GetElementIds();
+						//	不能使用并行，否则程序退出时要很久才能卸载内存
 						for (int ei : eleIds)
 						{
 							TPdElement& element_i = m_pd_meshcore.Element(ei);
@@ -625,10 +626,10 @@ namespace DLUT
 										if (intersect_volume_index > 0)
 										{
 											element_i.InsertFamilyElement(ej, intersect_volume_index);
-											
-											for (int is = 0; is < IP_COUNT_2D; ++is)
+											TIntegrationPoint& xi = element_i.IP(IP_COUNT_2D);
+									//		for (int is = 0; is < IP_COUNT_2D; ++is)
 											{
-												TIntegrationPoint& xi = element_i.IP(is);
+									//			TIntegrationPoint& xi = element_i.IP(is);
 												for (int js = 0; js < IP_COUNT_2D; ++js)
 												{
 													TIntegrationPoint& xj = element_j.IP(js);
@@ -722,7 +723,7 @@ namespace DLUT
 					}
 
 					double total_time = (clock() - start) / 1000;
-					cout << "UpdateFamilyInParts(): \t" << total_time << endl;
+					cout << "UpdateFamilyInParts(): \t\t" << total_time << endl;
 				}
 			public:
 				//	Refresh the *BOUNDARY_SPC_NODE informations into PD MODEL

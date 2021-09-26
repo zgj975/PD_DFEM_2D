@@ -405,7 +405,7 @@ namespace DLUT
 					double start = clock();
 					TPdModel& pdModel = *m_pPdModel;
 					set<int> eids = pdModel.PdMeshCore().GetElementIdsByAll();
-					/*parallel_*/for_each(eids.begin(), eids.end(), [&](int ei)
+					parallel_for_each(eids.begin(), eids.end(), [&](int ei)
 						{
 							TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
 							MAP_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
@@ -473,7 +473,8 @@ namespace DLUT
 								Eigen::MatrixXd Tb = bond.T_b();
 
 								//	0.5表示bond正反都会计算一次
-								SK += 0.5 * volume_scale * Ji * thickness_i * Jj * thickness_j * TE.transpose() * Nij.transpose() * Te * Tb.transpose() * k * Tb * Te.transpose() * Nij * TE;
+						//		SK += 0.5 * volume_scale * Ji * thickness_i * Jj * thickness_j * TE.transpose() * Nij.transpose() * Te * Tb.transpose() * k * Tb * Te.transpose() * Nij * TE;
+								SK += 0.5 * volume_scale * element_i.Area() * thickness_i * Jj * thickness_j * TE.transpose() * Nij.transpose() * Te * Tb.transpose() * k * Tb * Te.transpose() * Nij * TE;
 							}
 						}
 					}
