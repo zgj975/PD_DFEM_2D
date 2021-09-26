@@ -304,11 +304,9 @@ namespace DLUT
 							{
 								const double& sed_criterion = element_i.CalParas().sed_criterion;
 								const Eigen::Matrix4d& D_PD = element_i.CalParas().D_PD;
-								MAP_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
-								for (MAP_NJ_FAMILY_ELEMENT::iterator iter = familyElements.begin();
-									iter != familyElements.end(); ++iter)
-								{								
-									TPdFamilyElement& family_elem = iter->second;
+								LIST_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+								for (TPdFamilyElement& family_elem : familyElements)
+								{			
 									TPdElement& element_j = pdModel.PdMeshCore().Element(family_elem.Id());
 									//	单元本身不进行断裂判断
 									if (element_i.Id() == element_j.Id())
@@ -408,11 +406,9 @@ namespace DLUT
 					parallel_for_each(eids.begin(), eids.end(), [&](int ei)
 						{
 							TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
-							MAP_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
-							for (MAP_NJ_FAMILY_ELEMENT::iterator iter = familyElements.begin();
-								iter != familyElements.end(); ++iter)
+							LIST_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+							for (TPdFamilyElement& family_elem : familyElements)
 							{
-								TPdFamilyElement& family_elem = iter->second;
 								genSingleStiffnessPD_Element(ei, family_elem);
 							}
 						});
@@ -495,11 +491,10 @@ namespace DLUT
 						//	将单元I和单元J对应的节点放入一个nids，长度为8
 						const vector<int>& nids_i = element_i.NodeIds();
 
-						const MAP_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
-						for (const PAIR_NJ_FAMILY_ELEMENT& familyElemInfo : familyElements)
+						const LIST_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+						for (const TPdFamilyElement& family_elem : familyElements)
 						{
-							int ej = familyElemInfo.first;
-							const TPdElement& element_j = pdModel.PdMeshCore().Element(ej);
+							const TPdElement& element_j = pdModel.PdMeshCore().Element(family_elem.Id());
 							const vector<int>& nids_j = element_j.NodeIds();
 
 							vector<int> nids(nids_i);
@@ -508,7 +503,7 @@ namespace DLUT
 								nids.push_back(nj);
 							}
 
-							const SingleStiffness& SK = familyElemInfo.second.SK();
+							const SingleStiffness& SK = family_elem.SK();
 							int LenOfSK = 48;
 
 							for (int row = 0; row < LenOfSK; ++row)
@@ -588,13 +583,10 @@ namespace DLUT
 							{
 								double alpha_i = element_i.Alpha();
 								const Eigen::Matrix4d& D_PD = element_i.CalParas().D_PD;
-								MAP_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
-								for (MAP_NJ_FAMILY_ELEMENT::iterator iter = familyElements.begin();
-									iter != familyElements.end(); ++iter)
+								LIST_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+								for (TPdFamilyElement& family_elem : familyElements)
 								{
-									int nj = (*iter).first;
-									TPdFamilyElement& family_elem = (*iter).second;
-									const TPdElement& element_j = pdModel.PdMeshCore().Element(nj);
+									const TPdElement& element_j = pdModel.PdMeshCore().Element(family_elem.Id());
 									double alpha_j = element_j.Alpha();
 									double alpha = (alpha_i + alpha_j) / 2.0;
 									double volume_scale = family_elem.VolumeIndex();
@@ -669,12 +661,10 @@ namespace DLUT
 						{
 							TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
 
-							MAP_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
-							for (MAP_NJ_FAMILY_ELEMENT::iterator iter = familyElements.begin();
-								iter != familyElements.end(); ++iter)
+							LIST_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+							for (TPdFamilyElement& family_elem : familyElements)
 							{
-								int ej = iter->first;
-								TPdElement& element_j = pdModel.PdMeshCore().Element(ej);
+								TPdElement& element_j = pdModel.PdMeshCore().Element(family_elem.Id());
 							
 								//	将单元I和单元J对应的节点放入一个nids，长度为8							
 								vector<int> nids = element_i.NodeIds();								
@@ -682,7 +672,7 @@ namespace DLUT
 								{
 									nids.push_back(nj);
 								}
-								const SingleStiffness& SK = iter->second.SK();
+								const SingleStiffness& SK = family_elem.SK();
 
 								VectorXd DIS;
 								DIS.resize(48);
@@ -692,7 +682,7 @@ namespace DLUT
 								{
 									DIS.block(6*loop_Dis++, 0, 6, 1) = pdModel.PdMeshCore().Node(nid).Displacement();
 								}
-								iter->second.ForceOfBond() = SK * DIS;													
+								family_elem.ForceOfBond() = SK * DIS;													
 							}
 						});
 
@@ -702,18 +692,17 @@ namespace DLUT
 					for (int ei : eids)
 					{
 						TPdElement& element_i = pdModel.PdMeshCore().Element(ei);
-						MAP_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
-						for (const PAIR_NJ_FAMILY_ELEMENT& familyElemInfo : familyElements)
+						LIST_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+						for (const TPdFamilyElement& family_elem : familyElements)
 						{
-							int ej = familyElemInfo.first;
-							const TPdElement& element_j = pdModel.PdMeshCore().Element(ej);
+							const TPdElement& element_j = pdModel.PdMeshCore().Element(family_elem.Id());
 							vector<int> nids = element_i.NodeIds();
 							const vector<int>& nids_j = element_j.NodeIds();							
 							for (int nj : nids_j)
 							{
 								nids.push_back(nj);
 							}
-							const VectorXd& FORCE = familyElemInfo.second.ForceOfBond();
+							const VectorXd& FORCE = family_elem.ForceOfBond();
 							
 							int loop_force = 0;
 							for (int ni : nids)

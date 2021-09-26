@@ -299,11 +299,12 @@ void CPDManagerDlg::OnBnClickedOk()
 
 		product.ExplicitAnalysis();
 	}
-	fclose(fp_in);
-	fclose(fp_out);
 
 	cout << endl << endl;
 	system("pause");
+
+	fclose(fp_in);
+	fclose(fp_out);
 
 	FreeConsole();	
 }

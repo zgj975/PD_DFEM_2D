@@ -13,7 +13,7 @@ $HISTORY$
 #ifndef DLUT_SAE_PERIDYNAMIC_PD_DATABASE_HXX_20171220
 #define DLUT_SAE_PERIDYNAMIC_PD_DATABASE_HXX_20171220
 
-#include <map>
+#include <list>
 #include <string>
 
 #include "UMF/umfSolver.h"
@@ -158,8 +158,7 @@ namespace DLUT
 				bool					m_b_update;				//	SK should be updated?
 			};
 
-			typedef map<int, TPdFamilyElement>	MAP_NJ_FAMILY_ELEMENT;
-			typedef pair<int, TPdFamilyElement> PAIR_NJ_FAMILY_ELEMENT;
+			typedef list<TPdFamilyElement> LIST_NJ_FAMILY_ELEMENT;
 
 			typedef TNodeBase TPdNode;
 			//	Element
@@ -180,11 +179,9 @@ namespace DLUT
 			public:
 				//	The family nodes informations and operations
 				int						FamilyElementCount() const { return (int)m_map_family_elements.size(); }
-				MAP_NJ_FAMILY_ELEMENT&	FamilyElements() { return m_map_family_elements; }
-				const MAP_NJ_FAMILY_ELEMENT& FamilyElements() const { return m_map_family_elements; }
-				TPdFamilyElement&		FamilyElement(int eId) { return m_map_family_elements[eId]; }
-				void					InsertFamilyElement(int eId, double volume_index) { m_map_family_elements.insert(pair<int, TPdFamilyElement>(eId, TPdFamilyElement(eId, volume_index))); }
-				void					DeleteFamilyElement(int eId) { m_map_family_elements.erase(eId); }
+				LIST_NJ_FAMILY_ELEMENT&	FamilyElements() { return m_map_family_elements; }
+				const LIST_NJ_FAMILY_ELEMENT& FamilyElements() const { return m_map_family_elements; }
+				void					InsertFamilyElement(int eId, double volume_index) { m_map_family_elements.push_back(TPdFamilyElement(eId, volume_index)); }
 				void					ClearFamilyElements() { m_map_family_elements.clear(); }
 			public:
 				const TPdCalculateParas&	CalParas() const { return m_pd_paras; }
@@ -193,10 +190,9 @@ namespace DLUT
 				void					InitDamageIndex()
 				{
 					m_d_init_bond_nums = 0;
-					const MAP_NJ_FAMILY_ELEMENT& familyElems = FamilyElements();
-					for (const PAIR_NJ_FAMILY_ELEMENT& mnt : familyElems)
+					const LIST_NJ_FAMILY_ELEMENT& familyElements = FamilyElements();
+					for (const TPdFamilyElement& family_elem : familyElements)
 					{
-						const TPdFamilyElement& family_elem = mnt.second;
 						const vector<TPdBond>& bonds = family_elem.Bonds();
 						for (const TPdBond& bond : bonds)
 						{
@@ -211,10 +207,9 @@ namespace DLUT
 				double					DamageIndex() const
 				{
 					double invalid_bond_nums = 0;
-					const MAP_NJ_FAMILY_ELEMENT& mnfes = FamilyElements();
-					for (const PAIR_NJ_FAMILY_ELEMENT& pnfe : mnfes)
+					const LIST_NJ_FAMILY_ELEMENT& familyElements = FamilyElements();
+					for (const TPdFamilyElement& family_elem : familyElements)
 					{
-						const TPdFamilyElement& family_elem = pnfe.second;
 						const vector<TPdBond>& bonds = family_elem.Bonds();
 						for (const TPdBond& bond : bonds)
 						{
@@ -232,7 +227,7 @@ namespace DLUT
 				double&					Alpha() { return m_alpha; }
 
 			private:
-				MAP_NJ_FAMILY_ELEMENT	m_map_family_elements;				//	Bond informations
+				LIST_NJ_FAMILY_ELEMENT	m_map_family_elements;				//	Bond informations
 				TPdCalculateParas		m_pd_paras;							//	Calculate parameters of PD Element
 				double					m_d_init_bond_nums;					//	Initial volumes for damage calculation
 			private:
@@ -645,7 +640,7 @@ namespace DLUT
 													bond_local_coor_sys.block(1, 0, 1, 3) = ly.transpose();
 													bond_local_coor_sys.block(2, 0, 1, 3) = lz.transpose();
 
-													element_i.FamilyElement(ej).AddBond(xi, xj, bond_local_coor_sys);
+													element_i.FamilyElements().back().AddBond(xi, xj, bond_local_coor_sys);
 												}
 											}											
 											//	根据单元位置信息，计算耦合标量函数的信息alpha										
@@ -667,14 +662,14 @@ namespace DLUT
 						for (int ei : eleIds)
 						{
 							TPdElement& element_i = m_pd_meshcore.Element(ei);
-							MAP_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+							LIST_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
 							if (element_i.Alpha() > (1.0 - ERR_VALUE))
 							{
 								bool is_pd = true;
-								for (MAP_NJ_FAMILY_ELEMENT::iterator iter = familyElements.begin();
-									iter != familyElements.end(); ++iter)
+																
+								for (TPdFamilyElement& family_elem : familyElements)
 								{
-									TPdElement& element_j = PdMeshCore().Element((*iter).first);
+									TPdElement& element_j = PdMeshCore().Element(family_elem.Id());
 									if (element_j.Alpha() < 1.0)
 									{
 										is_pd = false;
@@ -696,10 +691,9 @@ namespace DLUT
 							{
 								element_i.AnalysisElementType() = FEM_ELEMENT;
 								bool is_fem = true;
-								for (MAP_NJ_FAMILY_ELEMENT::iterator iter = familyElements.begin();
-									iter != familyElements.end(); ++iter)
+								for (TPdFamilyElement& family_elem : familyElements)
 								{
-									TPdElement& element_j = PdMeshCore().Element((*iter).first);
+									TPdElement& element_j = PdMeshCore().Element(family_elem.Id());
 									if (element_j.Alpha() > ERR_VALUE)
 									{
 										is_fem = false;
@@ -917,19 +911,16 @@ namespace DLUT
 							parallel_for_each(eids.begin(), eids.end(), [&](int ei) {
 								TPdElement& element_i = m_pd_meshcore.Element(ei);
 								const TCoordinate& ei_coord = element_i.CoordinateInElement(0, 0);
-								MAP_NJ_FAMILY_ELEMENT& familyBonds = element_i.FamilyElements();
+								LIST_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
 
-								for (MAP_NJ_FAMILY_ELEMENT::iterator iter = familyBonds.begin();
-									iter != familyBonds.end(); ++iter)
+								for (TPdFamilyElement& family_elem : familyElements)
 								{
-									int ej = iter->first;
-									TPdElement& element_j = m_pd_meshcore.Element(ej);
+									TPdElement& element_j = m_pd_meshcore.Element(family_elem.Id());
 									const TCoordinate& ej_coord = element_j.CoordinateInElement(0, 0);
 
 									bool res = IsTowLineIntersect_xy_plane<Vector3d>(ei_coord, ej_coord, crevice.Start(), crevice.End());
 									if (res)
 									{
-										TPdFamilyElement& family_elem = iter->second;
 										vector<TPdBond>& bonds = family_elem.Bonds();
 										for (TPdBond& bond : bonds)
 										{
