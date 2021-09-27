@@ -268,7 +268,10 @@ namespace DLUT
 				void				ExplicitSolve(double time_interval)
 				{
 					TPdModel& pdModel = *m_pPdModel;
+					double start = clock();
 					calPdForces();
+					double total_time = (clock() - start) / 1000;
+					cout << "calPdForces():\t\t" << total_time << endl;
 
 					const set<int>& nodeIds = pdModel.PdMeshCore().GetNodeIdsByAll();
 					parallel_for_each(nodeIds.begin(), nodeIds.end(), [&](int nid)
@@ -294,8 +297,9 @@ namespace DLUT
 				void				RefreshFracture()
 				{
 					TPdModel& pdModel = *m_pPdModel;
-					
+
 					updateStrainStressPD();
+
 					const set<int>& eids = pdModel.PdMeshCore().GetElementIdsByAll();
 					parallel_for_each(eids.begin(), eids.end(), [&](int ei)
 						{
@@ -321,7 +325,7 @@ namespace DLUT
 									{
 										if (bond.IsValid() && (bond.MicroPotential() > sed_criterion))
 										{
-											bond.MakeFailure();
+											bond.Failured();
 											needUpdateSK = true;
 										}
 									}
@@ -426,20 +430,12 @@ namespace DLUT
 					{
 						int ej = family_elem.Id();
 						const TPdElement& element_j = pdModel.PdMeshCore().Element(ej);
-						double thickness_j = element_j.Thickness();
+						double thickness_j = element_j.Thickness();										
 
-						double ia = 0.5 * Distance_2pt<Vector3d>(element_i.Node(0).Coordinate(), element_i.Node(1).Coordinate());
-						double ib = 0.5 * Distance_2pt<Vector3d>(element_i.Node(1).Coordinate(), element_i.Node(2).Coordinate());
-
-						double ja = 0.5 * Distance_2pt<Vector3d>(element_j.Node(0).Coordinate(), element_j.Node(1).Coordinate());
-						double jb = 0.5 * Distance_2pt<Vector3d>(element_j.Node(1).Coordinate(), element_j.Node(2).Coordinate());
-
-						SingleStiffness& SK = family_elem.SK();
+						MATRTIX_SINGLE_STIFFNESS& SK = family_elem.SK();
 						SK.setZero();
 
 						double volume_scale = family_elem.VolumeIndex();
-						MatrixXd Te = T_elem(element_i, element_j);
-						MatrixXd TE = T_ELEM(element_i, element_j);
 
 						//	计算每一根bond的单刚
 						const vector<TPdBond>& bonds = family_elem.Bonds();
@@ -463,15 +459,8 @@ namespace DLUT
 									Eigen::MatrixXd BL = BL_Matrix_1D(L, S_IP_1D[js]);
 									k += BL.transpose() * D_PD * BL * H_IP_1D[js] * L;
 								}
-								// Bond 单刚
-
-						//		Eigen::MatrixXd Nij = N_IJ(S_IP_2D[Xi.Index()], T_IP_2D[Xi.Index()], ia, ib, S_IP_2D[Xj.Index()], T_IP_2D[Xj.Index()], ja, jb);
-						//		Eigen::MatrixXd Tb = bond.T_b();
-
-								//	0.5表示bond正反都会计算一次
-						//		SK += 0.5 * volume_scale * Ji * thickness_i * Jj * thickness_j * TE.transpose() * Nij.transpose() * Te * Tb.transpose() * k * Tb * Te.transpose() * Nij * TE;
-						//		SK += 0.5 * volume_scale * element_i.Area() * thickness_i * Jj * thickness_j * TE.transpose() * Nij.transpose() * Te * Tb.transpose() * k * Tb * Te.transpose() * Nij * TE;
-
+								// Bond 单刚						
+								
 								Eigen::Matrix<double, 12, 48> TbTetNijTE = Tb_Tet_Nij_TE(element_i, element_j, bond);
 								SK += 0.5 * volume_scale * element_i.Area() * thickness_i * Jj * thickness_j * TbTetNijTE.transpose() * k * TbTetNijTE;
 							}
@@ -506,7 +495,7 @@ namespace DLUT
 								nids.push_back(nj);
 							}
 
-							const SingleStiffness& SK = family_elem.SK();
+							const MATRTIX_SINGLE_STIFFNESS& SK = family_elem.SK();
 							int LenOfSK = 48;
 
 							for (int row = 0; row < LenOfSK; ++row)
@@ -675,7 +664,7 @@ namespace DLUT
 								{
 									nids.push_back(nj);
 								}
-								const SingleStiffness& SK = family_elem.SK();
+								const MATRTIX_SINGLE_STIFFNESS& SK = family_elem.SK();
 
 								VectorXd DIS;
 								DIS.resize(48);
@@ -685,7 +674,7 @@ namespace DLUT
 								{
 									DIS.block(6*loop_Dis++, 0, 6, 1) = pdModel.PdMeshCore().Node(nid).Displacement();
 								}
-								family_elem.ForceOfBond() = SK * DIS;													
+								family_elem.PdForce() = SK * DIS;
 							}
 						});
 
@@ -705,7 +694,7 @@ namespace DLUT
 							{
 								nids.push_back(nj);
 							}
-							const VectorXd& FORCE = family_elem.ForceOfBond();
+							const MATRIX_PD_FORCE& FORCE = family_elem.PdForce();
 							
 							int loop_force = 0;
 							for (int ni : nids)
@@ -764,14 +753,13 @@ namespace DLUT
 
 					const TBondPoint& Xi = bond.Xi();
 					const TBondPoint& Xj = bond.Xj();
-					Eigen::MatrixXd BondCoordSys = bond.LocalCoorSystem();
-					double ia = 0.5 * Distance_2pt<Vector3d>(element_i.Node(0).Coordinate(), element_i.Node(1).Coordinate());
-					double ib = 0.5 * Distance_2pt<Vector3d>(element_i.Node(1).Coordinate(), element_i.Node(2).Coordinate());
+				
+					double ia = 0.5 * element_i.SideA();
+					double ib = 0.5 * element_i.SideB();
 
-					double ja = 0.5 * Distance_2pt<Vector3d>(element_j.Node(0).Coordinate(), element_j.Node(1).Coordinate());
-					double jb = 0.5 * Distance_2pt<Vector3d>(element_j.Node(1).Coordinate(), element_j.Node(2).Coordinate());
-
-					
+					double ja = 0.5 * element_j.SideA();
+					double jb = 0.5 * element_j.SideB();
+										
 					Eigen::Matrix<double, 6, 6> lamda;
 					lamda.setZero();
 					lamda.block(0, 0, 3, 3) = bond.LocalCoorSystem();
@@ -788,6 +776,8 @@ namespace DLUT
 					TEi.setZero();
 					TEi.block(0, 0, 6, 6) = Tei;
 					TEi.block(6, 6, 6, 6) = Tei;
+					TEi.block(12, 12, 6, 6) = Tei;
+					TEi.block(18, 18, 6, 6) = Tei;
 
 					Res.block(0, 0, 6, 24) = lamda * Tei * Ni * TEi;
 
@@ -802,172 +792,13 @@ namespace DLUT
 					TEj.setZero();
 					TEj.block(0, 0, 6, 6) = Tej;
 					TEj.block(6, 6, 6, 6) = Tej;
+					TEj.block(12, 12, 6, 6) = Tej;
+					TEj.block(18, 18, 6, 6) = Tej;
 
 					Res.block(6, 24, 6, 24) = lamda * Tej * Nj * TEj;
 
 					return Res;
 				}
-
-				Eigen::MatrixXd N_IJ(double is, double it, double ia, double ib, double js, double jt, double ja, double jb)
-				{
-					Eigen::MatrixXd Res;
-					Res.resize(12, 48);
-					Res.setZero();
-
-					Res.block(0, 0, 6, 24) = M_SF_RECTANGLE_SHELL(is, it, ia, ib);
-					Res.block(6, 24, 6, 24) = M_SF_RECTANGLE_SHELL(js, jt, ja, jb);
-
-					return Res;
-				}
-				Eigen::MatrixXd T_elem(const TPdElement& element_i, const TPdElement& element_j)
-				{
-					Eigen::MatrixXd Res;
-					Res.resize(12, 12);
-					Res.setZero();
-
-					Matrix3d Local_Ei = element_i.LocalCoorSystem();
-					Matrix3d Local_Ej = element_j.LocalCoorSystem();
-
-					Res.block(0, 0, 3, 3) = Local_Ei;
-					Res.block(3, 3, 3, 3) = Local_Ei;
-					Res.block(6, 6, 3, 3) = Local_Ej;
-					Res.block(9, 9, 3, 3) = Local_Ej;
-
-					return Res;
-				}
-				Eigen::MatrixXd T_ELEM(const TPdElement& element_i, const TPdElement& element_j)
-				{
-					Eigen::MatrixXd Res;
-					Res.resize(48, 48);
-					Res.setZero();
-
-					Matrix3d Local_Ei = element_i.LocalCoorSystem();
-					Matrix3d Local_Ej = element_j.LocalCoorSystem();
-
-					for (int loop = 0; loop < 8; ++loop)
-					{
-						Res.block(loop * 3, loop * 3, 3, 3) = Local_Ei;
-						Res.block((loop + 8) * 3, (loop + 8) * 3, 3, 3) = Local_Ej;
-					}
-
-					return Res;
-				}	
-
-				Eigen::Matrix3d LAMDA(const Vector3d& localVector)
-				{
-					Eigen::Matrix3d T;
-					T.setZero();
-
-					double idist = Module<Vector3d>(localVector);
-					double Cx = localVector.x() / idist;
-					double Cy = localVector.y() / idist;
-					double Cz = localVector.z() / idist;
-
-					if (Cz + ERR_VALUE > 1.0)
-					{
-						//	局部x轴与全局Z轴一致
-						T(0, 2) = 1;
-						T(1, 1) = 1;
-						T(2, 0) = -1;
-					}
-					else if (Cz - ERR_VALUE < -1.0)
-					{
-						//	局部x轴与全局Z轴方向相反
-						T(0, 2) = -1;
-						T(1, 1) = 1;
-						T(2, 0) = 1;
-					}
-					else
-					{
-						double D = sqrt(Cx * Cx + Cy * Cy);
-						T(0, 0) = Cx;
-						T(0, 1) = Cy;
-						T(0, 2) = Cz;
-
-						T(1, 0) = -Cy / D;
-						T(1, 1) = Cx / D;
-						T(1, 2) = 0;
-
-						T(2, 0) = -Cx * Cz / D;
-						T(2, 1) = -Cy * Cz / D;
-						T(2, 2) = D;
-					}
-					return T;
-				}
-				Eigen::MatrixXd T_b(const Vector3d& localVector)
-				{
-					Eigen::MatrixXd Res;
-					Res.resize(12, 12);
-					Res.setZero();
-					Eigen::Matrix3d lamda = LAMDA(localVector);
-					Res.block(0, 0, 3, 3) = lamda;
-					Res.block(3, 3, 3, 3) = lamda;
-					Res.block(6, 6, 3, 3) = lamda;
-					Res.block(9, 9, 3, 3) = lamda;
-
-					return Res;
-				}
-				Eigen::MatrixXd SK_LOCAL(double cax, double cby, double cbz, double ctor, double L)
-				{
-					MatrixXd k;
-					k.resize(12, 12);
-					k.setZero();
-
-					k(0, 0) = cax / L;
-					k(0, 6) = -k(0, 0);
-
-					k(1, 1) = 12.0 * cbz / pow(L, 3);
-					k(1, 5) = 6.0 * cbz / pow(L, 2);
-					k(1, 7) = -k(1, 1);
-					k(1, 11) = k(1, 5);
-
-					k(2, 2) = 12.0 * cby / pow(L, 3);
-					k(2, 4) = -6.0 * cby / pow(L, 2);
-					k(2, 8) = -k(2, 2);
-					k(2, 10) = k(2, 4);
-
-					k(3, 3) = ctor / L;
-					k(3, 9) = -k(3, 3);
-
-					k(4, 2) = k(2, 4);
-					k(4, 4) = 4.0 * cby / L;
-					k(4, 8) = -k(4, 2);
-					k(4, 10) = 2.0 * cby / L;
-
-					k(5, 1) = k(1, 5);
-					k(5, 5) = 4.0 * cbz / L;
-					k(5, 7) = -k(5, 1);
-					k(5, 11) = 2.0 * cbz / L;
-
-					k(6, 0) = k(0, 6);
-					k(6, 6) = -k(6, 0);
-
-					k(7, 1) = k(1, 7);
-					k(7, 5) = k(5, 7);
-					k(7, 7) = -k(7, 1);
-					k(7, 11) = k(7, 5);
-
-					k(8, 2) = k(2, 8);
-					k(8, 4) = k(4, 8);
-					k(8, 8) = -k(8, 2);
-					k(8, 10) = k(8, 4);
-
-					k(9, 3) = k(3, 9);
-					k(9, 9) = -k(9, 3);
-
-					k(10, 2) = k(2, 10);
-					k(10, 4) = k(4, 10);
-					k(10, 8) = k(8, 10);
-					k(10, 10) = 4.0 * cby / L;
-
-					k(11, 1) = k(1, 11);
-					k(11, 5) = k(5, 11);
-					k(11, 7) = k(7, 11);
-					k(11, 11) = 4.0 * cbz / L;
-
-					return k;
-				}
-
 			private:
 				/************************************************************************/
 				/* Begin of FEM															*/

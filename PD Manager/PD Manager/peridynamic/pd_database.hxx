@@ -79,21 +79,7 @@ namespace DLUT
 				}
 			public:
 				Matrix3d&			LocalCoorSystem() { return m_local_coord_system; }
-				const Matrix3d&		LocalCoorSystem() const { return m_local_coord_system; }
-				//	键的局部坐标系与全局坐标系的转换矩阵
-				Eigen::MatrixXd		T_b() const
-				{
-					Eigen::MatrixXd Res;
-					Res.resize(12, 12);
-					Res.setZero();
-
-					Res.block(0, 0, 3, 3) = m_local_coord_system;
-					Res.block(3, 3, 3, 3) = m_local_coord_system;
-					Res.block(6, 6, 3, 3) = m_local_coord_system;
-					Res.block(9, 9, 3, 3) = m_local_coord_system;
-
-					return Res;
-				}
+				const Matrix3d&		LocalCoorSystem() const { return m_local_coord_system; }				
 			public:
 				TBondIntegrationPoint&			IP(int index) { return m_IP[index]; }
 				const TBondIntegrationPoint&	IP(int index) const { return m_IP[index]; }
@@ -101,7 +87,7 @@ namespace DLUT
 				double						MicroPotential() const { return m_micro_potential; }
 				double&						MicroPotential() { return m_micro_potential; }
 				bool						IsValid() const { return m_b_is_valid; }
-				void						MakeFailure() { m_b_is_valid = false; }
+				void						Failured() { m_b_is_valid = false; }
 			private:
 				double						m_micro_potential;
 				bool						m_b_is_valid;
@@ -142,16 +128,16 @@ namespace DLUT
 				vector<TPdBond>&		Bonds() { return m_bonds; }
 				const vector<TPdBond>&	Bonds() const { return m_bonds; }
 			public:
-				SingleStiffness&		SK() { return m_single_stiffness; }
-				const SingleStiffness&	SK() const { return m_single_stiffness; }
-				Eigen::VectorXd&		ForceOfBond() { return m_force; }
-				const Eigen::VectorXd&	ForceOfBond() const { return m_force; }
+				MATRTIX_SINGLE_STIFFNESS&		SK() { return m_single_stiffness; }
+				const MATRTIX_SINGLE_STIFFNESS&	SK() const { return m_single_stiffness; }
+				MATRIX_PD_FORCE&				PdForce() { return m_force; }
+				const MATRIX_PD_FORCE&			PdForce() const { return m_force; }
 			private:
-				int						m_eid_j;				//	Element J
-				double					m_volume_index;			//	Modified volume
-				vector<TPdBond>			m_bonds;				//	TPdBonds.
-				SingleStiffness			m_single_stiffness;		//	Single stiffness matrix of Bond_ij
-				Eigen::VectorXd			m_force;				//	FORCE vector of Element_ij
+				int							m_eid_j;				//	Element J
+				double						m_volume_index;			//	Modified volume
+				vector<TPdBond>				m_bonds;				//	TPdBonds.
+				MATRTIX_SINGLE_STIFFNESS	m_single_stiffness;		//	Single stiffness matrix of Bond_ij
+				MATRIX_PD_FORCE				m_force;				//	FORCE vector of Element_ij
 			};
 
 			typedef list<TPdFamilyElement> LIST_NJ_FAMILY_ELEMENT;
@@ -920,7 +906,7 @@ namespace DLUT
 										vector<TPdBond>& bonds = family_elem.Bonds();
 										for (TPdBond& bond : bonds)
 										{
-											bond.MakeFailure();
+											bond.Failured();
 										}
 									}
 								}

@@ -20,11 +20,11 @@ namespace DLUT
 			typedef Eigen::Matrix<double, 6, 1> TStrain;
 			typedef Eigen::Matrix<double, 4, 1> TStress_Bond;
 			typedef Eigen::Matrix<double, 4, 1> TStrain_Bond;
-			typedef Eigen::MatrixXd SingleMass;
-			typedef Eigen::Matrix<double, 48, 48> SingleStiffness;
-			const int IP_COUNT_2D = 4;
-			const int IP_COUNT_1D = 3;
-			const int DOF = 6;
+			typedef Eigen::Matrix<double, 48, 48>	MATRTIX_SINGLE_STIFFNESS;
+			typedef Eigen::Matrix<double, 48, 1>	MATRIX_PD_FORCE;
+			const int IP_COUNT_2D = 4;	//	2D单元有四个积分点
+			const int IP_COUNT_1D = 3;	//	1D单元有三个积分点
+			const int DOF = 6;			//	节点有3个平动自由度+3个转动自由度
 			//	2D 
 			const double S_IP_2D[5] = {1.0 / sqrt(3.0), 1.0 / sqrt(3.0), -1.0 / sqrt(3.0), -1.0 / sqrt(3.0), 0};
 			const double T_IP_2D[5] = {1.0 / sqrt(3.0), -1.0 / sqrt(3.0), 1.0 / sqrt(3.0), -1.0 / sqrt(3.0), 0};
@@ -432,9 +432,9 @@ namespace DLUT
 					return res;
 				}
 			public:
-				double&				SideLength() { return m_side_length; }
 				double				SideLength() const { return m_side_length; }
-				double&				Area() { return m_area; }
+				double				SideA() const { return m_side_a; }
+				double				SideB() const { return m_side_b; }
 				double				Area() const { return m_area; }
 				double&				Thickness() { return m_thickness; }
 				double				Thickness() const { return m_thickness; }
@@ -480,11 +480,7 @@ namespace DLUT
 				{
 					const Matrix3d& T = m_local_coord_system;
 					vector<int> nids = NodeIds();
-					if (MeshElementType() == TRIANGLE_ELEMENT)
-					{
-						nids.push_back(nids.back());
-					}
-
+					
 					Vector4d N;
 					N(0) = (1 - s) * (1 - t) / 4.0;
 					N(1) = (1 + s) * (1 - t) / 4.0;
@@ -571,8 +567,8 @@ namespace DLUT
 				Matrix3d&			LocalCoorSystem() { return m_local_coord_system; }
 				const Matrix3d&		LocalCoorSystem() const { return m_local_coord_system; }
 
-				SingleStiffness&			SK() { return m_single_stiffness; }
-				const SingleStiffness&		SK() const { return m_single_stiffness; }
+				MATRTIX_SINGLE_STIFFNESS&			SK() { return m_single_stiffness; }
+				const MATRTIX_SINGLE_STIFFNESS&		SK() const { return m_single_stiffness; }
 
 				TIntegrationPoint&			IP(int index) { return m_IP[index]; }
 				const TIntegrationPoint&	IP(int index) const { return m_IP[index]; }
@@ -619,11 +615,14 @@ namespace DLUT
 					const TCoordinate& n1 = ref_nodes[nids[1]].Coordinate();
 					const TCoordinate& n2 = ref_nodes[nids[2]].Coordinate();
 					const TCoordinate& n3 = ref_nodes[nids[3]].Coordinate();
-					SideLength() = (Distance_2pt(n0, n1) + Distance_2pt(n1, n2)) / 2.0;
+
+					m_side_a = Distance_2pt(n0, n1);
+					m_side_b = Distance_2pt(n1, n2);
+					m_side_length = (m_side_a + m_side_b) / 2;
 
 					double a = Calculate_Area_Triangle(n0, n1, n2);
 					double b = Calculate_Area_Triangle(n2, n3, n0);
-					Area() = a + b;
+					m_area = a + b;
 
 					UpdateIPCoordinate();
 				}
@@ -635,12 +634,14 @@ namespace DLUT
 				ANALYSIS_ELEMENT_TYPE		m_elem_type;			//	Element type
 			private:
 				double				m_side_length;					//	Side Length of this element
+				double				m_side_a;						//	Length of side A
+				double				m_side_b;						//	Length of side B
 				double				m_area;							//	Area of this element
 				double				m_thickness;					//	Thickness of this element
 			private:
 				Matrix3d			m_local_coord_system;			//	Local coordinate system of the element
 			private:
-				SingleStiffness		m_single_stiffness;				//	Single Stiffness Matrix of this element
+				MATRTIX_SINGLE_STIFFNESS		m_single_stiffness;				//	Single Stiffness Matrix of this element
 				vector<TIntegrationPoint>	m_IP;					//	Integration Points of this element
 			private:
 				vector<TNodeBase>&	ref_nodes;						//	Node Data
