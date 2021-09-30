@@ -351,6 +351,8 @@ namespace DLUT
 					m_elem_type = right.m_elem_type;
 
 					m_side_length = right.m_side_length;
+					m_side_a = right.m_side_a;
+					m_side_b = right.m_side_b;
 					m_area = right.m_area;
 					m_thickness = right.m_thickness;
 					m_local_coord_system = right.m_local_coord_system;
@@ -450,7 +452,7 @@ namespace DLUT
 					Vector4d Yc;
 					for (int i = 0; i < 4; ++i)
 					{
-						const Vector3d& cord_local = T * ref_nodes[nids[i]].Coordinate().block(0, 0, 3, 1);
+						const TCoordinate& cord_local = T * ref_nodes[nids[i]].Coordinate();
 						Xc(i) = cord_local.x();
 						Yc(i) = cord_local.y();
 					}
@@ -472,9 +474,7 @@ namespace DLUT
 					ST(3, 1) = s + t;
 					ST(3, 2) = -t - 1;
 
-					double J = 1.0 / 8.0 * Xc.transpose() * ST * Yc;
-
-					return abs(J);
+					return abs(1.0 / 8.0 * Xc.transpose() * ST * Yc);
 				}
 				TCoordinate			CoordinateInElement(double s, double t) const
 				{
@@ -1102,9 +1102,9 @@ namespace DLUT
 				~TCrevice() { /*Do nothing*/ }
 			public:
 				Vector3d&		Start() { return m_start; }
-				Vector3d		Start() const { return m_start; }
+				const Vector3d& Start() const { return m_start; }
 				Vector3d&		End() { return m_end; }
-				Vector3d		End() const { return m_end; }
+				const Vector3d	End() const { return m_end; }
 			private:
 				Vector3d		m_start;
 				Vector3d		m_end;

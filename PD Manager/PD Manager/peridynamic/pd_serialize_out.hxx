@@ -82,7 +82,7 @@ namespace DLUT
 				{
 					const TPdModel& pdModel = *m_p_PdModel;
 					int width = 20;
-
+										
 					fprintf(fout, "$TIME\t = %15.10f sec\n", curtime);
 
 					fprintf(fout, "$BINDING\t = NODE\n");

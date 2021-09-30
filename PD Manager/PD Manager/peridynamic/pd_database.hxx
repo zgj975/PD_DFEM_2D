@@ -505,38 +505,6 @@ namespace DLUT
 								for (int nid : nids)
 								{
 									PdMeshCore().Node(nid).BoundarySpcNode().push_back(TBoundarySpcNode(1));
-									/*
-									switch (con1)
-									{
-									case 1:
-										AddBounarySpcNode(TBoundarySpcNode(nid, 1));
-										break;
-									case 2:
-										AddBounarySpcNode(TBoundarySpcNode(nid, 2));
-										break;
-									case 3:
-										AddBounarySpcNode(TBoundarySpcNode(nid, 3));
-										break;
-									case 4:
-										AddBounarySpcNode(TBoundarySpcNode(nid, 1));
-										AddBounarySpcNode(TBoundarySpcNode(nid, 2));
-										break;
-									case 5:
-										AddBounarySpcNode(TBoundarySpcNode(nid, 2));
-										AddBounarySpcNode(TBoundarySpcNode(nid, 3));
-										break;
-									case 6:
-										AddBounarySpcNode(TBoundarySpcNode(nid, 3));
-										AddBounarySpcNode(TBoundarySpcNode(nid, 1));
-										break;
-									case 7:
-										AddBounarySpcNode(TBoundarySpcNode(nid, 1));
-										AddBounarySpcNode(TBoundarySpcNode(nid, 2));
-										AddBounarySpcNode(TBoundarySpcNode(nid, 3));
-										break;
-									default:
-										break;
-									}*/
 								}
 							}
 						}
@@ -599,14 +567,14 @@ namespace DLUT
 									if (Len < dis_for_juge)
 									{
 										Vector3d cij;
-										double intersect_volume_index = CalModifiedVolume(element_i, element_j, cij);
+										double intersect_volume_index = CalModifiedVolumeIndex(element_i, element_j, cij);
 										if (intersect_volume_index > 0)
 										{
 											element_i.InsertFamilyElement(ej, intersect_volume_index);
-											TIntegrationPoint& xi = element_i.IP(IP_COUNT_2D);
-									//		for (int is = 0; is < IP_COUNT_2D; ++is)
+									//		TIntegrationPoint& xi = element_i.IP(IP_COUNT_2D);
+											for (int is = 0; is < IP_COUNT_2D; ++is)
 											{
-									//			TIntegrationPoint& xi = element_i.IP(is);
+												TIntegrationPoint& xi = element_i.IP(is);
 												for (int js = 0; js < IP_COUNT_2D; ++js)
 												{
 													TIntegrationPoint& xj = element_j.IP(js);
@@ -884,23 +852,26 @@ namespace DLUT
 				void				GenerateInitCrevice()
 				{
 					double start = clock();
-				
-					for (const TCrevice& crevice : m_vec_crevice)
-					{
-						for (const TPart& part : Parts())
+
+					set<int> eids = PdMeshCore().GetElementIdsByAll();
+					parallel_for_each(eids.begin(), eids.end(), [&](int ei)
 						{
-							const set<int> eids = part.GetElementIds();
-							parallel_for_each(eids.begin(), eids.end(), [&](int ei) {
-								TPdElement& element_i = m_pd_meshcore.Element(ei);
-								const TCoordinate& ei_coord = element_i.CoordinateInElement(0, 0);
-								LIST_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
+							TPdElement& element_i = m_pd_meshcore.Element(ei);
+							const Matrix3d& T = element_i.LocalCoorSystem();
+							const TCoordinate& ei_coord_local = T * element_i.CoordinateInElement(0, 0);
+							LIST_NJ_FAMILY_ELEMENT& familyElements = element_i.FamilyElements();
 
-								for (TPdFamilyElement& family_elem : familyElements)
+							for (TPdFamilyElement& family_elem : familyElements)
+							{
+								TPdElement& element_j = m_pd_meshcore.Element(family_elem.Id());
+								const TCoordinate& ej_coord_local = T * element_j.CoordinateInElement(0, 0);
+
+								for (const TCrevice& crevice : m_vec_crevice)
 								{
-									TPdElement& element_j = m_pd_meshcore.Element(family_elem.Id());
-									const TCoordinate& ej_coord = element_j.CoordinateInElement(0, 0);
+									const TCoordinate cre_start = T * crevice.Start();
+									const TCoordinate cre_end = T * crevice.End();
 
-									bool res = IsTowLineIntersect_xy_plane<Vector3d>(ei_coord, ej_coord, crevice.Start(), crevice.End());
+									bool res = IsTowLineIntersect_xy_plane<Vector3d>(ei_coord_local, ej_coord_local, cre_start, cre_end);
 									if (res)
 									{
 										vector<TPdBond>& bonds = family_elem.Bonds();
@@ -909,11 +880,10 @@ namespace DLUT
 											bond.Failured();
 										}
 									}
-								}
-							});
-						}
-					}
-					
+								}								
+							}
+						});
+				
 					double total_time = (clock() - start) / 1000;
 					cout << "GenerateInitCrevice():\t\t" << total_time << endl;
 				}
@@ -933,7 +903,7 @@ namespace DLUT
 					cout << "GenerateInitDamage():\t\t" << total_time << endl;
 				}
 			public:
-				double				CalModifiedVolume(const TPdElement& element_i, const TPdElement& element_j, Vector3d& center)
+				double				CalModifiedVolumeIndex(const TPdElement& element_i, const TPdElement& element_j, Vector3d& center)
 				{
 					double volume_of_j = 0;
 				
@@ -963,16 +933,16 @@ namespace DLUT
 
 						if (element_j.MeshElementType() == TRIANGLE_ELEMENT)
 						{
-							volume_of_j = Calculate_Intersect_Area_Circle_Triangle(element_i.CoordinateInElement(0, 0), Ri, pt1, pt2, pt3, center) * thickness;
+							volume_of_j = Calculate_Intersect_Area_Circle_Triangle(element_i.CoordinateInElement(0, 0), Ri, pt1, pt2, pt3, center);
 						}
 						else
 						{
 							Vector3d pt4 = m_pd_meshcore.Node(nids[3]).Coordinate();
-							volume_of_j = Calculate_Intersect_Area_Circle_Quadrangle(element_i.CoordinateInElement(0, 0), Ri, pt1, pt2, pt3, pt4, center) * thickness;
+							volume_of_j = Calculate_Intersect_Area_Circle_Quadrangle(element_i.CoordinateInElement(0, 0), Ri, pt1, pt2, pt3, pt4, center);
 						}
 					}
 
-					return volume_of_j;
+					return volume_of_j / element_j.Area();
 				}				
 				double				CalAlpha(double xi, double horizon)
 				{
@@ -1004,7 +974,7 @@ namespace DLUT
 				{
 					for (const pair<int, double>& j_v : vec_map_matrix[i])
 					{
-						if (abs(j_v.second) > ERROR_FOR_SM)
+						if (j_v.second > ERROR_FOR_SM || j_v.second < -ERR_VALUE)
 						{
 							tri.push_back(Triplet<double>(i, j_v.first, j_v.second));
 						}

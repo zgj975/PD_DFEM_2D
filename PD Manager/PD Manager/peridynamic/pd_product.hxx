@@ -141,7 +141,6 @@ namespace DLUT
 					double start, end, cost;
 					start = clock();
 
-//					cout << "Static Analysis:" << endl;
 					//	Step 1: Read Pre-Process information
 					fun_initPreData();	
 					seri_ascii.OutputHwAscii(0);
@@ -156,6 +155,7 @@ namespace DLUT
 						bool is_convergenced = solver.ImplicitSolve(cur_step, m_load_step, ITERATOR_NUM);
 
 						double cur_step_cost = (clock() - cur_step_start) / 1000;
+						
 						if (is_convergenced)
 						{
 							seri_ascii.OutputHwAscii(cur_step);

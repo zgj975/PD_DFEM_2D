@@ -202,14 +202,11 @@ namespace DLUT
 						/* 求解线性方程组
 						*/
 						/************************************************************************/
-						SparseMatrix<double> sparse_matrix_GK;
-						TransVecMap2SparseMatrix(m_GK, sparse_matrix_GK);
-
 						vector<double> DISPLACEMENT;
 						DISPLACEMENT.clear();
-						DISPLACEMENT.resize(DOF * nCount, 0);
-
-						umf_solver(sparse_matrix_GK, DISPLACEMENT, FORCE);
+						DISPLACEMENT.resize(DOF* nCount, 0);
+										
+						umf_solver(m_GK, DISPLACEMENT, FORCE);
 						/************************************************************************/
 						/* 更新位移增量结果							                            */
 						/************************************************************************/
@@ -268,10 +265,7 @@ namespace DLUT
 				void				ExplicitSolve(double time_interval)
 				{
 					TPdModel& pdModel = *m_pPdModel;
-					double start = clock();
 					calPdForces();
-					double total_time = (clock() - start) / 1000;
-					cout << "calPdForces():\t\t" << total_time << endl;
 
 					const set<int>& nodeIds = pdModel.PdMeshCore().GetNodeIdsByAll();
 					parallel_for_each(nodeIds.begin(), nodeIds.end(), [&](int nid)
@@ -392,7 +386,7 @@ namespace DLUT
 							D_PD(2, 2) = E * (1 - 3 * PR) / (6 * PI * horizon * (1 - pow(PR, 2)) * t);
 							D_PD(3, 3) = 6 * D0 * (1 - 3 * PR) / (PI * pow(horizon, 3) * pow(t, 2));
 
-							sed_criterion = (3 * Gc) / (2 * t * pow(horizon, 3));
+							sed_criterion = (3 * Gc) / (2 * t * pow(horizon, 3)); 
 						});	
 					}
 
@@ -462,12 +456,12 @@ namespace DLUT
 								// Bond 单刚						
 								
 								Eigen::Matrix<double, 12, 48> TbTetNijTE = Tb_Tet_Nij_TE(element_i, element_j, bond);
-								SK += 0.5 * volume_scale * element_i.Area() * thickness_i * Jj * thickness_j * TbTetNijTE.transpose() * k * TbTetNijTE;
+						//		SK += 0.5 * volume_scale * element_i.Area() * thickness_i * Jj * thickness_j * TbTetNijTE.transpose() * k * TbTetNijTE;
+								SK += 0.5 * volume_scale * Ji * thickness_i * Jj * thickness_j * TbTetNijTE.transpose() * k * TbTetNijTE;
 							}
 						}
 					}
 				}
-
 				void				genGlobalStiffnessPD()
 				{
 					TPdModel& pdModel = *m_pPdModel;
@@ -505,6 +499,8 @@ namespace DLUT
 									int Row = nids[row / DOF] * DOF + row % DOF;
 									int Col = nids[col / DOF] * DOF + col % DOF;
 									m_GK[Row][Col] += SK(row, col);
+									//	按列存储，方便umf求解
+							//		m_GK[Col][Row] += SK(row, col);
 								}
 							}
 						}
